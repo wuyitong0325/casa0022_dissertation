@@ -1,0 +1,13 @@
+[Unit]
+Description=EchoBox Time-based Bird and Bat Detection Service
+After=network.target
+
+[Service]
+User=wuyitong0325
+WorkingDirectory=/home/wuyitong0325
+ExecStart=/usr/bin/python3 -u /home/wuyitong0325/main_monitor.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
