@@ -1,6 +1,9 @@
+import 'dart:typed_data';
+
 import 'package:audioplayers/audioplayers.dart';
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 import '../models/detection_event.dart';
 import '../models/species_profile.dart';
@@ -26,6 +29,7 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
   final AudioPlayer _player = AudioPlayer();
 
   bool isPlaying = false;
+  bool isDownloadingAudio = false;
   String? playError;
 
   @override
@@ -39,54 +43,153 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
 
     if (widget.event.isBat) {
       setState(() {
-        playError = 'Bat audio resolver will be added after supervisor discussion.';
+        playError =
+            'Bat sound database will be connected after supervisor discussion.';
       });
       return;
     }
 
     if (audioUrl == null || audioUrl.trim().isEmpty) {
       setState(() {
-        playError =
-            'Real bird recording is still loading. Close and reopen this card, or check network connection.';
+        playError = 'No verified xeno-canto recording is attached to this bird yet.';
       });
       return;
     }
 
     setState(() {
-      isPlaying = true;
+      isDownloadingAudio = true;
+      isPlaying = false;
       playError = null;
     });
 
     try {
+      final audioBytes = await _downloadAudioBytes(audioUrl);
+
+      if (!mounted) return;
+
+      if (audioBytes == null || audioBytes.lengthInBytes < 1000) {
+        setState(() {
+          playError =
+              'The recording link responded, but no valid audio data was downloaded.';
+          isDownloadingAudio = false;
+        });
+        return;
+      }
+
+      setState(() {
+        isDownloadingAudio = false;
+        isPlaying = true;
+      });
+
       await _player.stop();
-      await _player.play(UrlSource(audioUrl));
+      await _player.play(BytesSource(audioBytes));
 
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            widget.profile.audioSourceLabel == null
-                ? 'Playing real bird recording.'
-                : 'Playing ${widget.profile.audioSourceLabel}',
+            widget.profile.audioSourceLabel ??
+                'Playing real xeno-canto bird recording.',
           ),
         ),
       );
-    } catch (_) {
+    } catch (e) {
       if (!mounted) return;
 
       setState(() {
-        playError =
-            'This recording URL could not be played on this device. Try another network or reopen the card.';
+        playError = 'Audio download/playback failed: $e';
+        isDownloadingAudio = false;
+        isPlaying = false;
       });
     } finally {
-      await Future.delayed(const Duration(milliseconds: 700));
+      await Future.delayed(const Duration(milliseconds: 900));
+
       if (mounted) {
         setState(() {
           isPlaying = false;
+          isDownloadingAudio = false;
         });
       }
     }
+  }
+
+  Future<Uint8List?> _downloadAudioBytes(String rawUrl) async {
+    final urlsToTry = <String>[
+      rawUrl,
+      if (rawUrl.contains('/download') == false &&
+          widget.profile.audioSourceUrl != null &&
+          widget.profile.audioSourceUrl!.contains('xeno-canto.org/'))
+        '${widget.profile.audioSourceUrl}/download',
+    ];
+
+    for (final url in urlsToTry) {
+      try {
+        final uri = Uri.parse(url);
+
+        final response = await http.get(
+          uri,
+          headers: const {
+            'User-Agent':
+                'Mozilla/5.0 ParkLifeMonitor/1.0 Flutter Android',
+            'Accept': 'audio/mpeg,audio/*,*/*',
+          },
+        ).timeout(const Duration(seconds: 20));
+
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          continue;
+        }
+
+        final contentType =
+            response.headers['content-type']?.toLowerCase() ?? '';
+
+        final bytes = response.bodyBytes;
+
+        final looksLikeAudio = contentType.contains('audio') ||
+            _looksLikeMp3(bytes) ||
+            _looksLikeOgg(bytes) ||
+            _looksLikeWav(bytes);
+
+        if (bytes.lengthInBytes > 1000 && looksLikeAudio) {
+          return bytes;
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  bool _looksLikeMp3(Uint8List bytes) {
+    if (bytes.length < 3) return false;
+
+    final hasId3 = bytes[0] == 0x49 && bytes[1] == 0x44 && bytes[2] == 0x33;
+    final hasMp3Frame = bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0;
+
+    return hasId3 || hasMp3Frame;
+  }
+
+  bool _looksLikeOgg(Uint8List bytes) {
+    if (bytes.length < 4) return false;
+
+    return bytes[0] == 0x4F &&
+        bytes[1] == 0x67 &&
+        bytes[2] == 0x67 &&
+        bytes[3] == 0x53;
+  }
+
+  bool _looksLikeWav(Uint8List bytes) {
+    if (bytes.length < 12) return false;
+
+    return bytes[0] == 0x52 &&
+        bytes[1] == 0x49 &&
+        bytes[2] == 0x46 &&
+        bytes[3] == 0x46 &&
+        bytes[8] == 0x57 &&
+        bytes[9] == 0x41 &&
+        bytes[10] == 0x56 &&
+        bytes[11] == 0x45;
   }
 
   @override
@@ -94,10 +197,18 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
     final event = widget.event;
     final profile = widget.profile;
     final isBat = event.isBat;
+    final hasBirdAudio =
+        event.isBird && profile.audioUrl != null && profile.audioUrl!.isNotEmpty;
 
-    final hasAudio = !isBat &&
-        profile.audioUrl != null &&
-        profile.audioUrl!.trim().isNotEmpty;
+    final buttonLabel = isBat
+        ? 'Bat sound coming later'
+        : isDownloadingAudio
+            ? 'Downloading real bird recording...'
+            : isPlaying
+                ? 'Playing real bird recording...'
+                : hasBirdAudio
+                    ? 'Play real bird recording'
+                    : 'No verified bird sound attached';
 
     return DraggableScrollableSheet(
       expand: false,
@@ -162,23 +273,18 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
             const SizedBox(height: 18),
 
             FilledButton.icon(
-              onPressed: widget.isLoading || isPlaying ? null : _playSound,
+              onPressed:
+                  widget.isLoading || isPlaying || isDownloadingAudio ? null : _playSound,
               icon: Icon(
-                isPlaying
-                    ? Icons.graphic_eq_rounded
-                    : hasAudio
-                        ? Icons.play_arrow_rounded
-                        : Icons.cloud_sync_rounded,
-              ),
-              label: Text(
-                isBat
-                    ? 'Bat sound coming later'
+                isDownloadingAudio
+                    ? Icons.downloading_rounded
                     : isPlaying
-                        ? 'Playing real bird recording...'
-                        : hasAudio
-                            ? 'Play real bird recording'
-                            : 'Load real bird recording',
+                        ? Icons.graphic_eq_rounded
+                        : hasBirdAudio
+                            ? Icons.play_arrow_rounded
+                            : Icons.cloud_off_rounded,
               ),
+              label: Text(buttonLabel),
             ),
 
             if (playError != null) ...[
@@ -232,8 +338,8 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
             _InfoCard(
               title: 'Detection note',
               body: isBat
-                  ? 'Bat audio will be connected through a dedicated bat sound resolver after the data source is confirmed.'
-                  : 'This card uses xeno-canto to retrieve a real bird recording for the detected or selected species.',
+                  ? 'Bat audio will be connected later using a dedicated bat sound source.'
+                  : 'Bird audio is downloaded from a real xeno-canto recording and then played locally by the app.',
             ),
 
             if (profile.sourceLabel != null || profile.sourceUrl != null) ...[
