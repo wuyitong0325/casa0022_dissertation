@@ -4,8 +4,7 @@ class AppMqttConfig {
 
   static const String username = 'student';
 
-  // 本地 demo 可以先这样写。
-  // 不要把真实密码 push 到 GitHub。
+
   static const String password = String.fromEnvironment('MQTT_PASSWORD');
 
   static const String baseTopic = 'student/wuyitong0325/park_life_monitor';
