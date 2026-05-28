@@ -1,14 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../models/detection_event.dart';
 import '../services/mqtt_service.dart';
-import '../widgets/flying_creature_overlay.dart';
+import '../widgets/detection_celebration_overlay.dart';
 import '../widgets/latest_detection_card.dart';
 import '../widgets/mode_status_card.dart';
 import '../widgets/sound_wave_widget.dart';
 
-class LiveHabitatPage extends StatelessWidget {
+class LiveHabitatPage extends StatefulWidget {
   const LiveHabitatPage({super.key});
+
+  @override
+  State<LiveHabitatPage> createState() => _LiveHabitatPageState();
+}
+
+class _LiveHabitatPageState extends State<LiveHabitatPage> {
+  int _lastCelebrationTrigger = -1;
+  OverlayEntry? _activeOverlay;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    final mqtt = context.watch<MqttService>();
+
+    if (mqtt.latestEvent != null &&
+        mqtt.animationTrigger != _lastCelebrationTrigger) {
+      _lastCelebrationTrigger = mqtt.animationTrigger;
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        _showCelebration(mqtt.latestEvent!);
+      });
+    }
+  }
+
+  void _showCelebration(DetectionEvent event) {
+    _activeOverlay?.remove();
+    _activeOverlay = null;
+
+    late final OverlayEntry entry;
+
+    entry = OverlayEntry(
+      builder: (_) => DetectionCelebrationOverlay(
+        event: event,
+        onFinished: () {
+          entry.remove();
+          if (_activeOverlay == entry) {
+            _activeOverlay = null;
+          }
+        },
+      ),
+    );
+
+    _activeOverlay = entry;
+    Overlay.of(context).insert(entry);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,10 +90,19 @@ class LiveHabitatPage extends StatelessWidget {
               ),
             ),
           ),
-          FlyingCreatureOverlay(
-            event: mqtt.replayEvent ?? mqtt.latestEvent,
-            trigger: mqtt.animationTrigger,
+
+          Positioned(
+            right: 24,
+            top: 80,
+            child: Text(
+              isBatMode ? '🌙' : '☀️',
+              style: TextStyle(
+                fontSize: 74,
+                color: Colors.white.withOpacity(0.2),
+              ),
+            ),
           ),
+
           SafeArea(
             child: ListView(
               padding: const EdgeInsets.all(18),
@@ -125,6 +182,12 @@ class LiveHabitatPage extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _activeOverlay?.remove();
+    super.dispose();
   }
 }
 

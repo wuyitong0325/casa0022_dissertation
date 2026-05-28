@@ -102,11 +102,11 @@ class _RootShellState extends State<RootShell> {
           ),
           NavigationDestination(
             icon: Icon(Icons.graphic_eq_rounded),
-            label: 'Sound',
+            label: 'Sound Lab',
           ),
           NavigationDestination(
-            icon: Icon(Icons.collections_bookmark_rounded),
-            label: 'Species',
+            icon: Icon(Icons.emoji_events_rounded),
+            label: 'Discover',
           ),
           NavigationDestination(
             icon: Icon(Icons.settings_input_antenna_rounded),
