@@ -234,7 +234,7 @@ class _SoundExplorerPageState extends State<SoundExplorerPage> {
     return 'Bird calls are usually audible and often contain repeated patterns that AI models can classify.';
   }
 
-  Future<void> _openProfile(
+Future<void> _openProfile(
   BuildContext context,
   SpeciesProfile localProfile,
 ) async {
