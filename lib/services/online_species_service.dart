@@ -280,15 +280,15 @@ class _WikiResult {
 // 这些 URL 都是 xeno-canto download endpoint，是真实 recording，不是合成声音。
 const Map<String, _AudioResult> _knownBirdAudioByName = {
   'turdus merula': _AudioResult(
-    audioUrl: 'https://xeno-canto.org/739319/download',
-    sourceLabel: 'xeno-canto real recording · Common Blackbird',
-    sourcePageUrl: 'https://xeno-canto.org/739319',
-  ),
-  'common blackbird': _AudioResult(
-    audioUrl: 'https://xeno-canto.org/739319/download',
-    sourceLabel: 'xeno-canto real recording · Common Blackbird',
-    sourcePageUrl: 'https://xeno-canto.org/739319',
-  ),
+  audioUrl: 'https://xeno-canto.org/125792/download',
+  sourceLabel: 'xeno-canto real recording · Common Blackbird · XC125792',
+  sourcePageUrl: 'https://xeno-canto.org/125792',
+),
+'common blackbird': _AudioResult(
+  audioUrl: 'https://xeno-canto.org/125792/download',
+  sourceLabel: 'xeno-canto real recording · Common Blackbird · XC125792',
+  sourcePageUrl: 'https://xeno-canto.org/125792',
+),
 
   'erithacus rubecula': _AudioResult(
     audioUrl: 'https://xeno-canto.org/744846/download',
