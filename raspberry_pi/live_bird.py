@@ -26,19 +26,31 @@ from mqtt_config import (
 DEVICE_ID = "wuyitong-pi"
 
 # Your sounddevice input device.
-# Based on your previous Raspberry Pi output, device 1 was "default".
-# If recording fails, try changing this to None o
+# Based on your previous Raspberry Pi setup, "hw:2,0" is your microphone.
+# If recording fails, try changing this to None.
 AUDIO_DEVICE_ID = "hw:2,0"
 
 SAMPLE_RATE = 192000
 CHANNELS = 1
 RECORD_SECONDS = 15
-WAV_FILE = "live.wav"
+WAV_FILE = "/home/wuyitong0325/live.wav"
 
-MIN_CONFIDENCE = 0.15
+# BirdNET candidate threshold.
+# This allows us to see weak candidates in logs/status, but not publish them as real detections.
+BIRDNET_MIN_CONFIDENCE = 0.30
 
-# Filter obvious non-wildlife labels.
-# Your model produced "Engine", so we skip these before publishing to MQTT.
+# Only publish detections above this threshold to MQTT detections/bird.
+# This prevents random low-confidence species from entering the app Diary.
+PUBLISH_CONFIDENCE = 0.50
+
+# Anything between BIRDNET_MIN_CONFIDENCE and PUBLISH_CONFIDENCE is treated as weak signal.
+WEAK_CONFIDENCE = 0.30
+
+
+# =========================
+# Filters
+# =========================
+
 BAD_LABELS = [
     "engine",
     "noise",
@@ -48,7 +60,94 @@ BAD_LABELS = [
     "car",
     "traffic",
     "wind",
+    "music",
+    "radio",
+    "conversation",
 ]
+
+NON_BIRD_COMMON_WORDS = [
+    "wolf",
+    "dog",
+    "fox",
+    "cat",
+    "bear",
+    "cow",
+    "goat",
+    "sheep",
+    "pig",
+    "horse",
+    "rat",
+    "mouse",
+    "squirrel",
+    "frog",
+    "toad",
+    "bat",
+    "insect",
+    "cricket",
+]
+
+NON_BIRD_SCIENTIFIC_PREFIXES = [
+    "canis ",
+    "vulpes ",
+    "felis ",
+    "lynx ",
+    "ursus ",
+    "bos ",
+    "ovis ",
+    "capra ",
+    "sus ",
+    "equus ",
+    "rattus ",
+    "mus ",
+    "sciurus ",
+    "rana ",
+    "bufo ",
+    "hyla ",
+    "pipistrellus ",
+    "myotis ",
+    "plecotus ",
+    "eptesicus ",
+    "nyctalus ",
+    "rhinolophus ",
+]
+
+
+def looks_like_bad_or_non_bird(common_name, scientific_name):
+    common = (common_name or "").lower().strip()
+    scientific = (scientific_name or "").lower().strip()
+    joined = f"{common} {scientific}"
+
+    for word in BAD_LABELS:
+        if word in joined:
+            return True
+
+    for word in NON_BIRD_COMMON_WORDS:
+        if word in common:
+            return True
+
+    for prefix in NON_BIRD_SCIENTIFIC_PREFIXES:
+        if scientific.startswith(prefix):
+            return True
+
+    return False
+
+
+def should_publish_detection(common_name, scientific_name, confidence):
+    if confidence < PUBLISH_CONFIDENCE:
+        print(
+            f"Ignored weak bird candidate: {common_name} / {scientific_name} "
+            f"confidence={confidence:.2f}"
+        )
+        return False
+
+    if looks_like_bad_or_non_bird(common_name, scientific_name):
+        print(
+            f"Ignored non-bird/noise candidate: {common_name} / {scientific_name} "
+            f"confidence={confidence:.2f}"
+        )
+        return False
+
+    return True
 
 
 # =========================
@@ -72,7 +171,7 @@ def publish_status(status, extra=None):
     if extra:
         payload.update(extra)
 
-    print(payload)
+    print("STATUS:", payload)
 
     client.publish(
         BIRD_STATUS_TOPIC,
@@ -82,7 +181,7 @@ def publish_status(status, extra=None):
 
 
 def publish_detection(payload):
-    print(payload)
+    print("DETECTION:", payload)
 
     client.publish(
         BIRD_DETECTION_TOPIC,
@@ -115,6 +214,17 @@ while True:
     try:
         print("Recording...")
 
+        publish_status(
+            "listening",
+            {
+                "audio_file": WAV_FILE,
+                "record_seconds": RECORD_SECONDS,
+                "sample_rate": SAMPLE_RATE,
+                "birdnet_min_confidence": BIRDNET_MIN_CONFIDENCE,
+                "publish_confidence": PUBLISH_CONFIDENCE,
+            },
+        )
+
         audio = sd.rec(
             int(RECORD_SECONDS * SAMPLE_RATE),
             samplerate=SAMPLE_RATE,
@@ -132,14 +242,12 @@ while True:
         recording = Recording(
             analyzer,
             WAV_FILE,
-            min_conf=MIN_CONFIDENCE,
+            min_conf=BIRDNET_MIN_CONFIDENCE,
         )
 
         recording.analyze()
 
         detections = recording.detections
-
-        valid_count = 0
 
         if len(detections) == 0:
             print("No birds detected.")
@@ -148,55 +256,128 @@ while True:
                 "no_birds_detected",
                 {
                     "audio_file": WAV_FILE,
-                    "min_confidence": MIN_CONFIDENCE,
+                    "birdnet_min_confidence": BIRDNET_MIN_CONFIDENCE,
+                    "publish_confidence": PUBLISH_CONFIDENCE,
                 },
             )
 
-        else:
-            print("\nDetected species:\n")
+            time.sleep(2)
+            continue
 
-            for d in detections:
-                common_name = str(d.get("common_name", "Unknown"))
-                scientific_name = str(d.get("scientific_name", "Unknown"))
+        print("\nDetected candidates:\n")
+
+        valid_count = 0
+        weak_count = 0
+        rejected_count = 0
+
+        best_candidate = None
+        best_confidence = 0.0
+
+        for d in detections:
+            common_name = str(d.get("common_name", "Unknown"))
+            scientific_name = str(d.get("scientific_name", "Unknown"))
+
+            try:
                 confidence = float(d.get("confidence", 0.0))
+            except Exception:
+                confidence = 0.0
 
-                lower_name = common_name.lower()
+            start_time = float(d.get("start_time", 0.0))
+            end_time = float(d.get("end_time", 0.0))
 
-                if any(bad in lower_name for bad in BAD_LABELS):
-                    print(f"Skipping non-wildlife label: {common_name}")
-                    continue
+            print(
+                f"Candidate: {common_name} / {scientific_name} "
+                f"confidence={confidence:.2f}"
+            )
 
-                payload = {
-                    "device_id": DEVICE_ID,
-                    "type": "bird",
+            if confidence > best_confidence:
+                best_confidence = confidence
+                best_candidate = {
                     "common_name": common_name,
                     "scientific_name": scientific_name,
                     "confidence": confidence,
-                    "start_time": float(d.get("start_time", 0.0)),
-                    "end_time": float(d.get("end_time", 0.0)),
-                    "timestamp": datetime.now().isoformat(),
                 }
 
+            if looks_like_bad_or_non_bird(common_name, scientific_name):
+                rejected_count += 1
+                print(
+                    f"Rejected non-bird/noise candidate: "
+                    f"{common_name} / {scientific_name}"
+                )
+                continue
+
+            if confidence < PUBLISH_CONFIDENCE:
+                weak_count += 1
+                print(
+                    f"Weak candidate, not publishing to detections/bird: "
+                    f"{common_name} / {scientific_name} confidence={confidence:.2f}"
+                )
+                continue
+
+            payload = {
+                "device_id": DEVICE_ID,
+                "type": "bird",
+                "status": "bird_detected",
+                "common_name": common_name,
+                "scientific_name": scientific_name,
+                "confidence": confidence,
+                "start_time": start_time,
+                "end_time": end_time,
+                "audio_file": WAV_FILE,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            if should_publish_detection(common_name, scientific_name, confidence):
                 publish_detection(payload)
                 valid_count += 1
-
-            if valid_count == 0:
-                publish_status(
-                    "no_valid_birds_detected",
-                    {
-                        "audio_file": WAV_FILE,
-                        "reason": "detections_filtered_as_noise_or_non_wildlife",
-                        "min_confidence": MIN_CONFIDENCE,
-                    },
-                )
             else:
-                publish_status(
-                    "bird_detected",
+                rejected_count += 1
+                print("Detection was not published to MQTT detections/bird.")
+
+        if valid_count > 0:
+            publish_status(
+                "bird_detected",
+                {
+                    "count": valid_count,
+                    "weak_count": weak_count,
+                    "rejected_count": rejected_count,
+                    "birdnet_min_confidence": BIRDNET_MIN_CONFIDENCE,
+                    "publish_confidence": PUBLISH_CONFIDENCE,
+                },
+            )
+
+        elif weak_count > 0:
+            extra = {
+                "audio_file": WAV_FILE,
+                "reason": "weak_bird_candidates_below_publish_threshold",
+                "weak_count": weak_count,
+                "rejected_count": rejected_count,
+                "birdnet_min_confidence": BIRDNET_MIN_CONFIDENCE,
+                "publish_confidence": PUBLISH_CONFIDENCE,
+            }
+
+            if best_candidate:
+                extra.update(
                     {
-                        "count": valid_count,
-                        "min_confidence": MIN_CONFIDENCE,
-                    },
+                        "candidate_common_name": best_candidate["common_name"],
+                        "candidate_scientific_name": best_candidate["scientific_name"],
+                        "candidate_confidence": best_candidate["confidence"],
+                    }
                 )
+
+            publish_status("weak_signal", extra)
+
+        else:
+            publish_status(
+                "no_valid_birds_detected",
+                {
+                    "audio_file": WAV_FILE,
+                    "reason": "detections_filtered_as_noise_or_non_bird",
+                    "rejected_count": rejected_count,
+                    "birdnet_min_confidence": BIRDNET_MIN_CONFIDENCE,
+                    "publish_confidence": PUBLISH_CONFIDENCE,
+                },
+            )
 
         time.sleep(2)
 
