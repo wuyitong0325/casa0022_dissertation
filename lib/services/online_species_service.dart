@@ -8,6 +8,7 @@ import 'species_repository.dart';
 
 class OnlineSpeciesService {
   final Map<String, SpeciesProfile> _profileCache = {};
+  final Map<String, _AudioResult?> _audioCache = {};
 
   Future<SpeciesProfile> fetchProfile(DetectionEvent event) async {
     final cached = _profileCache[event.speciesKey];
@@ -31,13 +32,14 @@ class OnlineSpeciesService {
     }
 
     final audio = event.isBird
-        ? _knownBirdAudioByName[event.scientificName.toLowerCase().trim()] ??
-            _knownBirdAudioByName[event.commonName.toLowerCase().trim()] ??
-            await _fetchXenoCantoAudio(
-              commonName: event.commonName,
-              scientificName: event.scientificName,
-            )
-        : null;
+        ? await _resolveBirdAudio(
+            commonName: event.commonName,
+            scientificName: event.scientificName,
+          )
+        : await _resolveBatAudio(
+            commonName: event.commonName,
+            scientificName: event.scientificName,
+          );
 
     final profile = local.copyWith(
       description: description ?? local.description,
@@ -54,9 +56,83 @@ class OnlineSpeciesService {
     return profile;
   }
 
+  Future<_AudioResult?> _resolveBirdAudio({
+    required String commonName,
+    required String scientificName,
+  }) async {
+    final key = 'bird:${_clean(commonName).toLowerCase()}|${_clean(scientificName).toLowerCase()}';
+    if (_audioCache.containsKey(key)) return _audioCache[key];
+
+    final known = _knownBirdAudioByName[_clean(scientificName).toLowerCase()] ??
+        _knownBirdAudioByName[_clean(commonName).toLowerCase()];
+
+    if (known != null) {
+      _audioCache[key] = known;
+      return known;
+    }
+
+    final api = await _fetchXenoCantoAudio(
+      commonName: commonName,
+      scientificName: scientificName,
+      sourcePrefix: 'xeno-canto real bird recording',
+    );
+
+    _audioCache[key] = api;
+    return api;
+  }
+
+  Future<_AudioResult?> _resolveBatAudio({
+    required String commonName,
+    required String scientificName,
+  }) async {
+    final key = 'bat:${_clean(commonName).toLowerCase()}|${_clean(scientificName).toLowerCase()}';
+    if (_audioCache.containsKey(key)) return _audioCache[key];
+
+    final cleanCommon = _normaliseName(commonName);
+    final cleanScientific = _normaliseName(scientificName);
+
+    final known = _knownBatAudioByName[cleanScientific] ??
+        _knownBatAudioByName[cleanCommon];
+
+    if (known != null) {
+      _audioCache[key] = known;
+      return known;
+    }
+
+    final gbif = await _fetchGbifSound(
+      commonName: commonName,
+      scientificName: scientificName,
+      sourcePrefix: 'GBIF real bat sound',
+    );
+    if (gbif != null) {
+      _audioCache[key] = gbif;
+      return gbif;
+    }
+
+    final inat = await _fetchINaturalistSound(
+      commonName: commonName,
+      scientificName: scientificName,
+      sourcePrefix: 'iNaturalist real bat sound',
+    );
+    if (inat != null) {
+      _audioCache[key] = inat;
+      return inat;
+    }
+
+    final xeno = await _fetchXenoCantoAudio(
+      commonName: commonName,
+      scientificName: scientificName,
+      sourcePrefix: 'xeno-canto real bat recording',
+    );
+
+    _audioCache[key] = xeno;
+    return xeno;
+  }
+
   Future<_AudioResult?> _fetchXenoCantoAudio({
     required String commonName,
     required String scientificName,
+    required String sourcePrefix,
   }) async {
     final cleanScientific = _clean(scientificName);
     final cleanCommon = _clean(commonName);
@@ -71,14 +147,17 @@ class OnlineSpeciesService {
     ];
 
     for (final query in queries) {
-      final result = await _tryXenoCantoQuery(query);
+      final result = await _tryXenoCantoQuery(query, sourcePrefix);
       if (result != null) return result;
     }
 
     return null;
   }
 
-  Future<_AudioResult?> _tryXenoCantoQuery(String queryText) async {
+  Future<_AudioResult?> _tryXenoCantoQuery(
+    String queryText,
+    String sourcePrefix,
+  ) async {
     final encoded = Uri.encodeQueryComponent(queryText);
 
     final endpoints = [
@@ -114,7 +193,7 @@ class OnlineSpeciesService {
 
           return _AudioResult(
             audioUrl: url,
-            sourceLabel: _sourceLabelFromXenoItem(item),
+            sourceLabel: _sourceLabelFromXenoItem(item, sourcePrefix),
             sourcePageUrl: 'https://xeno-canto.org/$id',
           );
         }
@@ -126,13 +205,143 @@ class OnlineSpeciesService {
     return null;
   }
 
-  String _sourceLabelFromXenoItem(Map<String, dynamic> item) {
+  Future<_AudioResult?> _fetchGbifSound({
+    required String commonName,
+    required String scientificName,
+    required String sourcePrefix,
+  }) async {
+    final queryName = _clean(scientificName).isNotEmpty
+        ? _clean(scientificName)
+        : _clean(commonName);
+
+    if (queryName.isEmpty) return null;
+
+    try {
+      final uri = Uri.parse(
+        'https://api.gbif.org/v1/occurrence/search'
+        '?scientificName=${Uri.encodeQueryComponent(queryName)}'
+        '&mediaType=Sound'
+        '&limit=25',
+      );
+
+      final response = await http.get(
+        uri,
+        headers: const {
+          'Accept': 'application/json',
+          'User-Agent': 'ParkLifeMonitor/1.0',
+        },
+      ).timeout(const Duration(seconds: 12));
+
+      if (response.statusCode != 200) return null;
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = data['results'];
+
+      if (results is! List) return null;
+
+      for (final result in results.whereType<Map<String, dynamic>>()) {
+        final media = result['media'];
+        if (media is! List) continue;
+
+        for (final item in media.whereType<Map<String, dynamic>>()) {
+          final type = item['type']?.toString().toLowerCase() ?? '';
+          final identifier = item['identifier']?.toString();
+          final references = item['references']?.toString();
+
+          final candidate = _normaliseAudioUrl(identifier) ??
+              _normaliseAudioUrl(references);
+
+          if (candidate == null) continue;
+
+          if (type.contains('sound') || _looksLikeAudioUrl(candidate)) {
+            return _AudioResult(
+              audioUrl: candidate,
+              sourceLabel: '$sourcePrefix · $queryName',
+              sourcePageUrl: references ?? 'https://www.gbif.org/',
+            );
+          }
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  Future<_AudioResult?> _fetchINaturalistSound({
+    required String commonName,
+    required String scientificName,
+    required String sourcePrefix,
+  }) async {
+    final queryName = _clean(scientificName).isNotEmpty
+        ? _clean(scientificName)
+        : _clean(commonName);
+
+    if (queryName.isEmpty) return null;
+
+    try {
+      final uri = Uri.parse(
+        'https://api.inaturalist.org/v1/observations'
+        '?q=${Uri.encodeQueryComponent(queryName)}'
+        '&sounds=true'
+        '&quality_grade=research'
+        '&per_page=30',
+      );
+
+      final response = await http.get(
+        uri,
+        headers: const {
+          'Accept': 'application/json',
+          'User-Agent': 'ParkLifeMonitor/1.0',
+        },
+      ).timeout(const Duration(seconds: 12));
+
+      if (response.statusCode != 200) return null;
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final results = data['results'];
+
+      if (results is! List) return null;
+
+      for (final result in results.whereType<Map<String, dynamic>>()) {
+        final sounds = result['sounds'];
+        if (sounds is! List) continue;
+
+        for (final sound in sounds.whereType<Map<String, dynamic>>()) {
+          final fileUrl = sound['file_url']?.toString() ??
+              sound['url']?.toString() ??
+              sound['original_url']?.toString();
+
+          final audioUrl = _normaliseAudioUrl(fileUrl);
+
+          if (audioUrl != null) {
+            return _AudioResult(
+              audioUrl: audioUrl,
+              sourceLabel: '$sourcePrefix · $queryName',
+              sourcePageUrl:
+                  result['uri']?.toString() ?? 'https://www.inaturalist.org/',
+            );
+          }
+        }
+      }
+    } catch (_) {
+      return null;
+    }
+
+    return null;
+  }
+
+  String _sourceLabelFromXenoItem(
+    Map<String, dynamic> item,
+    String sourcePrefix,
+  ) {
     final quality = item['q']?.toString();
     final recordist = item['rec']?.toString();
     final country = item['cnt']?.toString();
 
     final parts = [
-      'xeno-canto real recording',
+      sourcePrefix,
       if (quality != null && quality.isNotEmpty) 'quality $quality',
       if (country != null && country.isNotEmpty) country,
       if (recordist != null && recordist.isNotEmpty) 'by $recordist',
@@ -149,6 +358,8 @@ class OnlineSpeciesService {
     final type = item['type']?.toString().toLowerCase() ?? '';
     if (type.contains('song')) score += 30;
     if (type.contains('call')) score += 20;
+    if (type.contains('social')) score += 15;
+    if (type.contains('echolocation')) score += 15;
 
     final length = item['length']?.toString();
     final seconds = _lengthToSeconds(length);
@@ -190,6 +401,30 @@ class OnlineSpeciesService {
     return minutes * 60 + seconds;
   }
 
+  String? _normaliseAudioUrl(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return null;
+
+    final value = raw.trim();
+
+    if (value.startsWith('https://')) return value;
+    if (value.startsWith('http://')) return value;
+    if (value.startsWith('//')) return 'https:$value';
+
+    return null;
+  }
+
+  bool _looksLikeAudioUrl(String url) {
+    final lower = url.toLowerCase();
+
+    return lower.endsWith('.mp3') ||
+        lower.endsWith('.wav') ||
+        lower.endsWith('.ogg') ||
+        lower.endsWith('.m4a') ||
+        lower.contains('/audio/') ||
+        lower.contains('/sound') ||
+        lower.contains('sound');
+  }
+
   String _clean(String value) {
     final trimmed = value.trim();
 
@@ -198,6 +433,15 @@ class OnlineSpeciesService {
     if (trimmed.toLowerCase().contains('possible')) return '';
 
     return trimmed;
+  }
+
+  String _normaliseName(String value) {
+    return _clean(value)
+        .toLowerCase()
+        .replaceAll('’', "'")
+        .replaceAll('-', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
   }
 
   Future<_WikiResult?> _fetchWikipediaSummaryAndImage({
@@ -276,19 +520,17 @@ class _WikiResult {
   });
 }
 
-// 先保证 Sound Lab 里这些常见鸟必定有真实 xeno-canto 链接。
-// 这些 URL 都是 xeno-canto download endpoint，是真实 recording，不是合成声音。
 const Map<String, _AudioResult> _knownBirdAudioByName = {
   'turdus merula': _AudioResult(
-  audioUrl: 'https://xeno-canto.org/125792/download',
-  sourceLabel: 'xeno-canto real recording · Common Blackbird · XC125792',
-  sourcePageUrl: 'https://xeno-canto.org/125792',
-),
-'common blackbird': _AudioResult(
-  audioUrl: 'https://xeno-canto.org/125792/download',
-  sourceLabel: 'xeno-canto real recording · Common Blackbird · XC125792',
-  sourcePageUrl: 'https://xeno-canto.org/125792',
-),
+    audioUrl: 'https://xeno-canto.org/125792/download',
+    sourceLabel: 'xeno-canto real recording · Common Blackbird · XC125792',
+    sourcePageUrl: 'https://xeno-canto.org/125792',
+  ),
+  'common blackbird': _AudioResult(
+    audioUrl: 'https://xeno-canto.org/125792/download',
+    sourceLabel: 'xeno-canto real recording · Common Blackbird · XC125792',
+    sourcePageUrl: 'https://xeno-canto.org/125792',
+  ),
 
   'erithacus rubecula': _AudioResult(
     audioUrl: 'https://xeno-canto.org/744846/download',
@@ -409,5 +651,137 @@ const Map<String, _AudioResult> _knownBirdAudioByName = {
     audioUrl: 'https://xeno-canto.org/744905/download',
     sourceLabel: 'xeno-canto real recording · Common Raven',
     sourcePageUrl: 'https://xeno-canto.org/744905',
+  ),
+};
+
+const Map<String, _AudioResult> _knownBatAudioByName = {
+
+    'eptesicus serotinus': _AudioResult(
+    audioUrl: 'https://xeno-canto.org/923069/download',
+    sourceLabel: 'xeno-canto real bat recording · Eurasian Serotine · Eptesicus serotinus · XC923069',
+    sourcePageUrl: 'https://xeno-canto.org/923069',
+  ),
+  'serotine': _AudioResult(
+    audioUrl: 'https://xeno-canto.org/923069/download',
+    sourceLabel: 'xeno-canto real bat recording · Eurasian Serotine · Eptesicus serotinus · XC923069',
+    sourcePageUrl: 'https://xeno-canto.org/923069',
+  ),
+  'myotis daubentonii': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Myotis_daubentonii.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Daubenton’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  "daubenton's bat": _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Myotis_daubentonii.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Daubenton’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'daubentons bat': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Myotis_daubentonii.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Daubenton’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'myotis mystacinus': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Myotis_mystacinus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Whiskered Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'whiskered bat': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Myotis_mystacinus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Whiskered Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'myotis nattereri': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Myotis_nattereri.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Natterer’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  "natterer's bat": _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Myotis_nattereri.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Natterer’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'nyctalus leisleri': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Nyctalus_leisleri.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Leisler’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  "leisler's bat": _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Nyctalus_leisleri.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Leisler’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'leislers bat': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Nyctalus_leisleri.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Leisler’s Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'pipistrellus nathusii': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Pipistrellus_nathusii.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Nathusius’ Pipistrelle',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  "nathusius' pipistrelle": _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Pipistrellus_nathusii.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Nathusius’ Pipistrelle',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'nathusius pipistrelle': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Pipistrellus_nathusii.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Nathusius’ Pipistrelle',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'pipistrellus pipistrellus': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Pipistrellus_pipistrellus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Common Pipistrelle',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'common pipistrelle': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Pipistrellus_pipistrellus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Common Pipistrelle',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'pipistrellus pygmaeus': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Pipistrellus_pygmaeus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Soprano Pipistrelle',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'soprano pipistrelle': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Pipistrellus_pygmaeus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Soprano Pipistrelle',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'plecotus auritus': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Plecotus_auritus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Brown Long-eared Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'brown long eared bat': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Plecotus_auritus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Brown Long-eared Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'brown long-eared bat': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Plecotus_auritus.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Brown Long-eared Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+
+  'rhinolophus hipposideros': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Rhinolophus_hipposideros.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Lesser Horseshoe Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
+  ),
+  'lesser horseshoe bat': _AudioResult(
+    audioUrl: 'https://biodiversityireland.ie/resources/bats/wav_files/FullSpectrum_Rhinolophus_hipposideros.wav',
+    sourceLabel: 'Biodiversity Ireland real Full Spectrum bat recording · Lesser Horseshoe Bat',
+    sourcePageUrl: 'https://biodiversityireland.ie/resources/bats/bat-sounds.html',
   ),
 };

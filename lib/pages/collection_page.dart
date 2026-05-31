@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import '../models/detection_event.dart';
 import '../models/species_profile.dart';
 import '../services/collection_service.dart';
+import '../services/detection_history_service.dart';
 import '../services/mqtt_service.dart';
 import '../services/online_species_service.dart';
 import '../services/species_repository.dart';
@@ -24,13 +25,15 @@ class _CollectionPageState extends State<CollectionPage> {
   Widget build(BuildContext context) {
     final mqtt = context.watch<MqttService>();
     final collection = context.watch<CollectionService>();
+    final history = context.watch<DetectionHistoryService>();
 
-    final allProfiles = _buildProfileList(mqtt);
-    final stats = _buildStats(mqtt.diaryEvents);
+    final allProfiles = _buildProfileList(mqtt, history.events);
+    final stats = _buildStats(history.events);
 
     final unlockedProfiles = allProfiles.where((profile) {
       final event = _fakeEvent(profile);
-      return collection.isUnlocked(event.speciesKey);
+      final key = event.speciesKey;
+      return collection.isUnlocked(key) || stats.containsKey(key);
     }).toList();
 
     final birdUnlocked = unlockedProfiles.where((p) => p.type == 'bird').length;
@@ -39,7 +42,8 @@ class _CollectionPageState extends State<CollectionPage> {
     final filtered = allProfiles.where((profile) {
       final event = _fakeEvent(profile);
       final key = event.speciesKey;
-      final unlocked = collection.isUnlocked(key);
+
+      final unlocked = collection.isUnlocked(key) || stats.containsKey(key);
       final favourite = collection.isFavourite(key);
 
       if (filter == 'birds') return profile.type == 'bird';
@@ -52,8 +56,11 @@ class _CollectionPageState extends State<CollectionPage> {
     }).toList();
 
     filtered.sort((a, b) {
-      final aUnlocked = collection.isUnlocked(_fakeEvent(a).speciesKey);
-      final bUnlocked = collection.isUnlocked(_fakeEvent(b).speciesKey);
+      final aKey = _fakeEvent(a).speciesKey;
+      final bKey = _fakeEvent(b).speciesKey;
+
+      final aUnlocked = collection.isUnlocked(aKey) || stats.containsKey(aKey);
+      final bUnlocked = collection.isUnlocked(bKey) || stats.containsKey(bKey);
 
       if (aUnlocked && !bUnlocked) return -1;
       if (!aUnlocked && bUnlocked) return 1;
@@ -77,20 +84,17 @@ class _CollectionPageState extends State<CollectionPage> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'This page aggregates detections by species. It shows what the park has revealed over time, rather than listing every single event.',
+            'This page aggregates saved detections by species. Diary shows each event; Discoveries shows what the park has revealed.',
             style: TextStyle(color: Colors.black54),
           ),
           const SizedBox(height: 16),
-
           _ProgressPanel(
             discovered: unlockedProfiles.length,
             total: allProfiles.length,
             birds: birdUnlocked,
             bats: batUnlocked,
           ),
-
           const SizedBox(height: 16),
-
           Wrap(
             spacing: 8,
             runSpacing: 8,
@@ -133,9 +137,7 @@ class _CollectionPageState extends State<CollectionPage> {
               ),
             ],
           ),
-
           const SizedBox(height: 18),
-
           if (filtered.isEmpty)
             const Padding(
               padding: EdgeInsets.all(24),
@@ -146,13 +148,14 @@ class _CollectionPageState extends State<CollectionPage> {
                 ),
               ),
             ),
-
           for (final profile in filtered)
             Builder(
               builder: (context) {
                 final event = _fakeEvent(profile);
                 final key = event.speciesKey;
-                final unlocked = collection.isUnlocked(key);
+
+                final unlocked =
+                    collection.isUnlocked(key) || stats.containsKey(key);
                 final favourite = collection.isFavourite(key);
                 final stat = stats[key];
 
@@ -184,21 +187,41 @@ class _CollectionPageState extends State<CollectionPage> {
     );
   }
 
-  List<SpeciesProfile> _buildProfileList(MqttService mqtt) {
+  List<SpeciesProfile> _buildProfileList(
+    MqttService mqtt,
+    List<DetectionEvent> savedEvents,
+  ) {
     final profiles = <SpeciesProfile>[
       ...SpeciesRepository.curatedProfiles,
     ];
 
     for (final onlineProfile in mqtt.speciesProfiles.values) {
-      final alreadyExists = profiles.any(
+      final exists = profiles.any(
         (p) =>
-            p.commonName.toLowerCase() == onlineProfile.commonName.toLowerCase() ||
+            p.commonName.toLowerCase() ==
+                onlineProfile.commonName.toLowerCase() ||
             p.scientificName.toLowerCase() ==
                 onlineProfile.scientificName.toLowerCase(),
       );
 
-      if (!alreadyExists) {
+      if (!exists) {
         profiles.add(onlineProfile);
+      }
+    }
+
+    for (final event in savedEvents) {
+      final profile = mqtt.speciesProfiles[event.speciesKey] ??
+          SpeciesRepository.findLocalProfile(event);
+
+      final exists = profiles.any(
+        (p) =>
+            p.commonName.toLowerCase() == profile.commonName.toLowerCase() ||
+            p.scientificName.toLowerCase() ==
+                profile.scientificName.toLowerCase(),
+      );
+
+      if (!exists) {
+        profiles.add(profile);
       }
     }
 
@@ -270,46 +293,47 @@ class _CollectionPageState extends State<CollectionPage> {
     return time.hour >= 20 || time.hour < 5;
   }
 
- Future<void> _openDiscoveryProfile({
-  required BuildContext context,
-  required SpeciesProfile profile,
-  required DetectionEvent event,
-}) async {
-  final onlineService = context.read<OnlineSpeciesService>();
-  final mqtt = context.read<MqttService>();
+  Future<void> _openDiscoveryProfile({
+    required BuildContext context,
+    required SpeciesProfile profile,
+    required DetectionEvent event,
+  }) async {
+    final onlineService = context.read<OnlineSpeciesService>();
+    final mqtt = context.read<MqttService>();
 
-  setState(() {
-    loadingKey = event.speciesKey;
-  });
+    setState(() {
+      loadingKey = event.speciesKey;
+    });
 
-  SpeciesProfile loadedProfile = mqtt.speciesProfiles[event.speciesKey] ?? profile;
+    SpeciesProfile loadedProfile = mqtt.speciesProfiles[event.speciesKey] ??
+        profile;
 
-  try {
-    loadedProfile = await onlineService.fetchProfile(event);
-    mqtt.speciesProfiles[event.speciesKey] = loadedProfile;
-  } catch (_) {
-    loadedProfile = mqtt.speciesProfiles[event.speciesKey] ?? profile;
+    try {
+      loadedProfile = await onlineService.fetchProfile(event);
+      mqtt.speciesProfiles[event.speciesKey] = loadedProfile;
+    } catch (_) {
+      loadedProfile = mqtt.speciesProfiles[event.speciesKey] ?? profile;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      loadingKey = null;
+    });
+
+    if (!context.mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => SpeciesInfoSheet(
+        event: event,
+        profile: loadedProfile,
+        isLoading: false,
+      ),
+    );
   }
-
-  if (!mounted) return;
-
-  setState(() {
-    loadingKey = null;
-  });
-
-  if (!context.mounted) return;
-
-  showModalBottomSheet(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (_) => SpeciesInfoSheet(
-      event: event,
-      profile: loadedProfile,
-      isLoading: false,
-    ),
-  );
-}
 
   void _setFilter(String value) {
     setState(() => filter = value);
@@ -544,7 +568,7 @@ class _DiscoveryCard extends StatelessWidget {
                       ],
                     )
                   else if (unlocked)
-                    const _TinyBadge(text: 'Unlocked by demo')
+                    const _TinyBadge(text: 'Unlocked')
                   else
                     _TinyBadge(
                       text: profile.type == 'bat'

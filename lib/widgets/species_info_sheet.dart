@@ -41,17 +41,11 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
   Future<void> _playSound() async {
     final audioUrl = widget.profile.audioUrl;
 
-    if (widget.event.isBat) {
-      setState(() {
-        playError =
-            'Bat sound database will be connected after supervisor discussion.';
-      });
-      return;
-    }
-
     if (audioUrl == null || audioUrl.trim().isEmpty) {
       setState(() {
-        playError = 'No verified xeno-canto recording is attached to this bird yet.';
+        playError = widget.event.isBat
+            ? 'No verified bat recording is attached to this species yet.'
+            : 'No verified bird recording is attached to this species yet.';
       });
       return;
     }
@@ -90,7 +84,7 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
         SnackBar(
           content: Text(
             widget.profile.audioSourceLabel ??
-                'Playing real xeno-canto bird recording.',
+                'Playing real wildlife recording.',
           ),
         ),
       );
@@ -117,7 +111,7 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
   Future<Uint8List?> _downloadAudioBytes(String rawUrl) async {
     final urlsToTry = <String>[
       rawUrl,
-      if (rawUrl.contains('/download') == false &&
+      if (!rawUrl.contains('/download') &&
           widget.profile.audioSourceUrl != null &&
           widget.profile.audioSourceUrl!.contains('xeno-canto.org/'))
         '${widget.profile.audioSourceUrl}/download',
@@ -125,27 +119,25 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
 
     for (final url in urlsToTry) {
       try {
-        final uri = Uri.parse(url);
-
         final response = await http.get(
-          uri,
+          Uri.parse(url),
           headers: const {
-            'User-Agent':
-                'Mozilla/5.0 ParkLifeMonitor/1.0 Flutter Android',
-            'Accept': 'audio/mpeg,audio/*,*/*',
+            'User-Agent': 'Mozilla/5.0 ParkLifeMonitor/1.0 Flutter Android',
+            'Accept': 'audio/wav,audio/x-wav,audio/ogg,audio/mpeg,audio/*,*/*',
           },
-        ).timeout(const Duration(seconds: 20));
+        ).timeout(const Duration(seconds: 25));
 
         if (response.statusCode < 200 || response.statusCode >= 300) {
           continue;
         }
 
+        final bytes = response.bodyBytes;
         final contentType =
             response.headers['content-type']?.toLowerCase() ?? '';
 
-        final bytes = response.bodyBytes;
-
         final looksLikeAudio = contentType.contains('audio') ||
+            contentType.contains('wav') ||
+            contentType.contains('ogg') ||
             _looksLikeMp3(bytes) ||
             _looksLikeOgg(bytes) ||
             _looksLikeWav(bytes);
@@ -197,17 +189,18 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
     final event = widget.event;
     final profile = widget.profile;
     final isBat = event.isBat;
-    final hasBirdAudio =
-        event.isBird && profile.audioUrl != null && profile.audioUrl!.isNotEmpty;
+    final hasAudio = profile.audioUrl != null && profile.audioUrl!.isNotEmpty;
 
-    final buttonLabel = isBat
-        ? 'Bat sound coming later'
-        : isDownloadingAudio
-            ? 'Downloading real bird recording...'
-            : isPlaying
-                ? 'Playing real bird recording...'
-                : hasBirdAudio
-                    ? 'Play real bird recording'
+    final buttonLabel = isDownloadingAudio
+        ? 'Downloading real wildlife recording...'
+        : isPlaying
+            ? 'Playing real wildlife recording...'
+            : hasAudio
+                ? isBat
+                    ? 'Play real bat recording'
+                    : 'Play real bird recording'
+                : isBat
+                    ? 'No verified bat sound attached'
                     : 'No verified bird sound attached';
 
     return DraggableScrollableSheet(
@@ -273,14 +266,15 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
             const SizedBox(height: 18),
 
             FilledButton.icon(
-              onPressed:
-                  widget.isLoading || isPlaying || isDownloadingAudio ? null : _playSound,
+              onPressed: widget.isLoading || isPlaying || isDownloadingAudio
+                  ? null
+                  : _playSound,
               icon: Icon(
                 isDownloadingAudio
                     ? Icons.downloading_rounded
                     : isPlaying
                         ? Icons.graphic_eq_rounded
-                        : hasBirdAudio
+                        : hasAudio
                             ? Icons.play_arrow_rounded
                             : Icons.cloud_off_rounded,
               ),
@@ -338,8 +332,8 @@ class _SpeciesInfoSheetState extends State<SpeciesInfoSheet> {
             _InfoCard(
               title: 'Detection note',
               body: isBat
-                  ? 'Bat audio will be connected later using a dedicated bat sound source.'
-                  : 'Bird audio is downloaded from a real xeno-canto recording and then played locally by the app.',
+                  ? 'Bat audio is linked to a real bat recording source when available. Some files are full-spectrum detector recordings rather than phone-speaker test sounds.'
+                  : 'Bird audio is linked to a real xeno-canto recording where available.',
             ),
 
             if (profile.sourceLabel != null || profile.sourceUrl != null) ...[

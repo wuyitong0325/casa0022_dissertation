@@ -16,24 +16,49 @@ class LiveHabitatPage extends StatefulWidget {
 }
 
 class _LiveHabitatPageState extends State<LiveHabitatPage> {
-  int _lastCelebrationTrigger = -1;
+  MqttService? _mqttService;
+
+  // 关键：记录当前 Live 页面已经处理过的 animationTrigger。
+  // 返回 Live 页面时，不会因为 latestEvent 还在就重复弹旧动画。
+  int _lastHandledAnimationTrigger = 0;
+
   OverlayEntry? _activeOverlay;
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
 
-    final mqtt = context.watch<MqttService>();
+    final service = context.read<MqttService>();
 
-    if (mqtt.latestEvent != null &&
-        mqtt.animationTrigger != _lastCelebrationTrigger) {
-      _lastCelebrationTrigger = mqtt.animationTrigger;
+    if (_mqttService == service) return;
 
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (!mounted) return;
-        _showCelebration(mqtt.latestEvent!);
-      });
+    _mqttService?.removeListener(_handleMqttChanged);
+    _mqttService = service;
+
+    // 关键：进入 Live 页面时，把当前已有的 trigger 记录下来。
+    // 这样从 Diary / Sound / Discover 返回 Live 时，不会重复播放旧 detection。
+    _lastHandledAnimationTrigger = service.animationTrigger;
+
+    _mqttService?.addListener(_handleMqttChanged);
+  }
+
+  void _handleMqttChanged() {
+    final service = _mqttService;
+    if (service == null) return;
+
+    final event = service.latestEvent;
+    if (event == null) return;
+
+    // 只有新的 detection 才播放动画。
+    if (service.animationTrigger <= _lastHandledAnimationTrigger) {
+      return;
     }
+
+    _lastHandledAnimationTrigger = service.animationTrigger;
+
+    if (!mounted) return;
+
+    _showCelebration(event);
   }
 
   void _showCelebration(DetectionEvent event) {
@@ -186,7 +211,9 @@ class _LiveHabitatPageState extends State<LiveHabitatPage> {
 
   @override
   void dispose() {
+    _mqttService?.removeListener(_handleMqttChanged);
     _activeOverlay?.remove();
+    _activeOverlay = null;
     super.dispose();
   }
 }

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../models/detection_event.dart';
+import '../services/detection_history_service.dart';
 import '../services/mqtt_service.dart';
 import '../widgets/confidence_chip.dart';
 import '../widgets/species_info_sheet.dart';
@@ -11,16 +12,17 @@ class NatureDiaryPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final mqtt = context.watch<MqttService>();
-    final events = mqtt.diaryEvents;
+    final history = context.watch<DetectionHistoryService>();
+    final events = history.events;
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Nature Diary'),
         actions: [
           IconButton(
-            onPressed: mqtt.clearDiary,
+            onPressed: events.isEmpty ? null : history.clear,
             icon: const Icon(Icons.delete_outline_rounded),
+            tooltip: 'Clear diary',
           ),
         ],
       ),
@@ -29,7 +31,7 @@ class NatureDiaryPage extends StatelessWidget {
               child: Padding(
                 padding: EdgeInsets.all(28),
                 child: Text(
-                  'No field notes yet.\nLive bird and bat detections will appear here as a timeline.',
+                  'No field notes yet.\nLive bird and bat detections will appear here and stay saved after closing the app.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Colors.black54),
                 ),
@@ -47,7 +49,7 @@ class NatureDiaryPage extends StatelessWidget {
                 ),
                 const SizedBox(height: 6),
                 const Text(
-                  'Diary records every detection event in time order. Discoveries groups these events by species.',
+                  'Diary records the latest 30 detection events in time order. These notes are saved locally on this phone.',
                   style: TextStyle(color: Colors.black54),
                 ),
                 const SizedBox(height: 18),
@@ -77,6 +79,7 @@ class _TimelineEntry extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final mqtt = context.watch<MqttService>();
+
     final profile = mqtt.profileForEvent(event);
     final isLoading = mqtt.isProfileLoading(event);
 
