@@ -1,16 +1,10 @@
-# park_life_monitor
+## API Keys and Runtime Configuration
 
-A new Flutter project.
+This project uses MQTT for Raspberry Pi communication and xeno-canto API v3 for online bird sound lookup.
 
-## Getting Started
+Do not hard-code private keys in the source code.
 
-This project is a starting point for a Flutter application.
+Run the Flutter app with:
 
-A few resources to get you started if this is your first Flutter project:
-
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
-
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```powershell
+flutter run -d YOUR_DEVICE --dart-define=MQTT_PASSWORD=your-mqtt-password --dart-define=XENO_CANTO_API_KEY=your-xeno-canto-api-key
