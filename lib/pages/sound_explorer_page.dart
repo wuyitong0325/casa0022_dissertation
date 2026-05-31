@@ -1,14 +1,12 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
 
 import '../models/detection_event.dart';
 import '../models/species_profile.dart';
-import '../services/mqtt_service.dart';
 import '../services/online_species_service.dart';
 import '../services/species_repository.dart';
-import '../widgets/sound_wave_widget.dart';
 import '../widgets/species_info_sheet.dart';
 
 class SoundExplorerPage extends StatefulWidget {
@@ -20,61 +18,23 @@ class SoundExplorerPage extends StatefulWidget {
 
 class _SoundExplorerPageState extends State<SoundExplorerPage> {
   String filter = 'all';
-  String labMode = 'bird';
-  double frequency = 45;
-  double noiseLevel = 0.25;
-  String? guessResult;
   String? loadingKey;
-
-  final Random _random = Random();
-
-  String challenge = 'bird';
-
-  @override
-  void initState() {
-    super.initState();
-    _newChallenge();
-  }
-
-  void _newChallenge() {
-    final options = ['bird', 'bat', 'noise'];
-    challenge = options[_random.nextInt(options.length)];
-    guessResult = null;
-  }
+  _AtlasMarker? selectedMarker;
 
   @override
   Widget build(BuildContext context) {
-    final mqtt = context.watch<MqttService>();
-
-    final baseProfiles = SpeciesRepository.curatedProfiles;
-    final onlineProfiles = mqtt.speciesProfiles.values.toList();
-
-    final profiles = [
-      ...baseProfiles,
-      ...onlineProfiles.where(
-        (p) => !baseProfiles.any(
-          (b) =>
-              b.commonName.toLowerCase() == p.commonName.toLowerCase() ||
-              b.scientificName.toLowerCase() == p.scientificName.toLowerCase(),
-        ),
-      ),
-    ].where((profile) {
-      if (filter == 'all') return true;
-      return profile.type == filter;
-    }).toList();
-
-    final simulatedConfidence =
-        ((1.0 - noiseLevel) * 0.82 + 0.12).clamp(0.0, 1.0);
+    final profiles = SpeciesRepository.curatedProfiles;
+    final markers = _filteredMarkers();
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Sound Lab'),
+        title: const Text('Species Atlas'),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           const Text(
-            'Sound Lab',
+            'Explore Wildlife Around the World',
             style: TextStyle(
               fontSize: 28,
               fontWeight: FontWeight.w900,
@@ -82,254 +42,498 @@ class _SoundExplorerPageState extends State<SoundExplorerPage> {
           ),
           const SizedBox(height: 6),
           const Text(
-            'Explore how acoustic signals become AI wildlife detections.',
+            'Tap a bird or bat marker to learn where the reference species is commonly found, then open its full species profile.',
             style: TextStyle(color: Colors.black54),
           ),
-          const SizedBox(height: 18),
+          const SizedBox(height: 16),
 
-          _LabModeCard(
-            mode: labMode,
-            onChanged: (value) {
+          _AtlasMapCard(
+            markers: markers,
+            selectedMarker: selectedMarker,
+            onMarkerTap: (marker) {
               setState(() {
-                labMode = value;
-                if (value == 'bird') frequency = 6;
-                if (value == 'bat') frequency = 65;
-                if (value == 'noise') frequency = 15;
+                selectedMarker = marker;
               });
+            },
+            onOpenReference: (marker) {
+              final profile = _profileForMarker(marker, profiles);
+              _openProfile(
+                context: context,
+                localProfile: profile,
+              );
             },
           ),
 
           const SizedBox(height: 14),
 
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(26),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              _FilterChip(
+                label: 'All',
+                value: 'all',
+                group: filter,
+                onTap: _setFilter,
+              ),
+              _FilterChip(
+                label: 'Birds',
+                value: 'birds',
+                group: filter,
+                onTap: _setFilter,
+              ),
+              _FilterChip(
+                label: 'Bats',
+                value: 'bats',
+                group: filter,
+                onTap: _setFilter,
+              ),
+              _FilterChip(
+                label: 'Europe',
+                value: 'europe',
+                group: filter,
+                onTap: _setFilter,
+              ),
+              _FilterChip(
+                label: 'Worldwide',
+                value: 'worldwide',
+                group: filter,
+                onTap: _setFilter,
+              ),
+            ],
+          ),
+
+          const SizedBox(height: 16),
+
+          const _AtlasLegend(),
+
+          const SizedBox(height: 22),
+
+          const Text(
+            'Reference Species',
+            style: TextStyle(
+              fontSize: 24,
+              fontWeight: FontWeight.w900,
             ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Tap a species to view images, habitat notes, behaviour and real wildlife sound where available.',
+            style: TextStyle(color: Colors.black54),
+          ),
+          const SizedBox(height: 14),
+
+          for (final profile in _filteredProfiles(profiles))
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: _ReferenceSpeciesCard(
+                profile: profile,
+                isLoading: loadingKey == _profileKey(profile),
+                onTap: () => _openProfile(
+                  context: context,
+                  localProfile: profile,
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<_AtlasMarker> _filteredMarkers() {
+    return _atlasMarkers.where((marker) {
+      if (filter == 'birds') return marker.type == 'bird';
+      if (filter == 'bats') return marker.type == 'bat';
+      if (filter == 'europe') return marker.regionGroup == 'europe';
+      if (filter == 'worldwide') return marker.regionGroup == 'worldwide';
+      return true;
+    }).toList();
+  }
+
+  List<SpeciesProfile> _filteredProfiles(List<SpeciesProfile> profiles) {
+    return profiles.where((profile) {
+      if (filter == 'birds') return profile.type == 'bird';
+      if (filter == 'bats') return profile.type == 'bat';
+
+      if (filter == 'europe' || filter == 'worldwide') {
+        final key = _profileKey(profile);
+        return _atlasMarkers.any(
+          (marker) =>
+              _markerKey(marker) == key && marker.regionGroup == filter,
+        );
+      }
+
+      return true;
+    }).toList();
+  }
+
+  SpeciesProfile _profileForMarker(
+    _AtlasMarker marker,
+    List<SpeciesProfile> profiles,
+  ) {
+    final markerKey = _markerKey(marker);
+
+    for (final profile in profiles) {
+      if (_profileKey(profile) == markerKey) {
+        return profile;
+      }
+    }
+
+    return SpeciesProfile(
+      commonName: marker.commonName,
+      scientificName: marker.scientificName,
+      type: marker.type,
+      description:
+          '${marker.commonName} is included as a reference species in the Park Life Monitor atlas.',
+      habitatNote: marker.habitat,
+      funFact: marker.region,
+    );
+  }
+
+  Future<void> _openProfile({
+    required BuildContext context,
+    required SpeciesProfile localProfile,
+  }) async {
+    final onlineService = context.read<OnlineSpeciesService>();
+
+    final event = DetectionEvent(
+      deviceId: 'species-atlas',
+      type: localProfile.type,
+      commonName: localProfile.commonName,
+      scientificName: localProfile.scientificName,
+      confidence: 1,
+      startTime: 0,
+      endTime: 0,
+      timestamp: DateTime.now(),
+    );
+
+    final key = _profileKey(localProfile);
+
+    setState(() {
+      loadingKey = key;
+    });
+
+    SpeciesProfile profile = localProfile;
+
+    try {
+      profile = await onlineService.fetchProfile(event);
+    } catch (_) {
+      profile = localProfile;
+    }
+
+    if (!mounted) return;
+
+    setState(() {
+      loadingKey = null;
+    });
+
+    if (!context.mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => SpeciesInfoSheet(
+        event: event,
+        profile: profile,
+        isLoading: false,
+      ),
+    );
+  }
+
+  void _setFilter(String value) {
+    setState(() {
+      filter = value;
+      selectedMarker = null;
+    });
+  }
+
+  String _profileKey(SpeciesProfile profile) {
+    return '${profile.type}:${profile.scientificName.toLowerCase().trim()}';
+  }
+
+  String _markerKey(_AtlasMarker marker) {
+    return '${marker.type}:${marker.scientificName.toLowerCase().trim()}';
+  }
+}
+
+class _AtlasMapCard extends StatelessWidget {
+  final List<_AtlasMarker> markers;
+  final _AtlasMarker? selectedMarker;
+  final ValueChanged<_AtlasMarker> onMarkerTap;
+  final ValueChanged<_AtlasMarker> onOpenReference;
+
+  const _AtlasMapCard({
+    required this.markers,
+    required this.selectedMarker,
+    required this.onMarkerTap,
+    required this.onOpenReference,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      height: 430,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(28),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          FlutterMap(
+            options: MapOptions(
+              initialCenter: const LatLng(35.0, 15.0),
+              initialZoom: 2.0,
+              minZoom: 2.0,
+              maxZoom: 7.0,
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.drag |
+                    InteractiveFlag.pinchZoom |
+                    InteractiveFlag.doubleTapZoom |
+                    InteractiveFlag.scrollWheelZoom,
+              ),
+            ),
+            children: [
+              TileLayer(
+                urlTemplate:
+                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                userAgentPackageName: 'com.example.park_life_monitor',
+              ),
+              MarkerLayer(
+                markers: markers.map((marker) {
+                  return Marker(
+                    point: marker.position,
+                    width: 46,
+                    height: 46,
+                    child: GestureDetector(
+                      onTap: () => onMarkerTap(marker),
+                      child: _MapMarkerBubble(marker: marker),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
+
+          Positioned(
+            left: 14,
+            top: 14,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 9,
+              ),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.92),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.public_rounded, size: 18),
+                  SizedBox(width: 6),
+                  Text(
+                    'Zoom and tap markers',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          if (selectedMarker != null)
+            Positioned(
+              left: 14,
+              right: 14,
+              bottom: 14,
+              child: _SelectedMarkerCard(
+                marker: selectedMarker!,
+                onOpenReference: () => onOpenReference(selectedMarker!),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MapMarkerBubble extends StatelessWidget {
+  final _AtlasMarker marker;
+
+  const _MapMarkerBubble({
+    required this.marker,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isBat = marker.type == 'bat';
+
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 180),
+      decoration: BoxDecoration(
+        color: isBat ? const Color(0xFF352A66) : const Color(0xFFEAF6E8),
+        shape: BoxShape.circle,
+        border: Border.all(
+          color: Colors.white,
+          width: 3,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.22),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Center(
+        child: Text(
+          isBat ? '🦇' : '🐦',
+          style: const TextStyle(fontSize: 23),
+        ),
+      ),
+    );
+  }
+}
+
+class _SelectedMarkerCard extends StatelessWidget {
+  final _AtlasMarker marker;
+  final VoidCallback onOpenReference;
+
+  const _SelectedMarkerCard({
+    required this.marker,
+    required this.onOpenReference,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final isBat = marker.type == 'bat';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.96),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.12),
+            blurRadius: 16,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: isBat
+                  ? const Color(0xFFE9E2FF)
+                  : const Color(0xFFEAF6E8),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Center(
+              child: Text(
+                isBat ? '🦇' : '🐦',
+                style: const TextStyle(fontSize: 28),
+              ),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text(
-                  'What the microphone hears',
-                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
-                ),
-                const SizedBox(height: 8),
-                SoundWaveWidget(
-                  active: true,
-                  intensity: labMode == 'bat'
-                      ? 1.45
-                      : labMode == 'noise'
-                          ? 0.65
-                          : 1.0,
-                ),
-                const SizedBox(height: 8),
                 Text(
-                  _modeExplanation(labMode),
-                  style: const TextStyle(color: Colors.black54),
+                  marker.commonName,
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 3),
+                Text(
+                  marker.region,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.black54,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  marker.habitat,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    color: Colors.black87,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
           ),
-
-          const SizedBox(height: 14),
-
-          _FrequencyExplorer(
-            frequency: frequency,
-            onChanged: (value) {
-              setState(() {
-                frequency = value;
-              });
-            },
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: onOpenReference,
+            child: const Text('Open'),
           ),
+        ],
+      ),
+    );
+  }
+}
 
-          const SizedBox(height: 14),
+class _AtlasLegend extends StatelessWidget {
+  const _AtlasLegend();
 
-          _ConfidenceSimulator(
-            noiseLevel: noiseLevel,
-            confidence: simulatedConfidence,
-            onChanged: (value) {
-              setState(() {
-                noiseLevel = value;
-              });
-            },
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.86),
+        borderRadius: BorderRadius.circular(22),
+      ),
+      child: const Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Atlas guide',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+              fontSize: 16,
+            ),
           ),
-
-          const SizedBox(height: 14),
-
-          _GuessSoundCard(
-            challenge: challenge,
-            result: guessResult,
-            onGuess: (guess) {
-              setState(() {
-                guessResult = guess == challenge
-                    ? 'Correct! The AI-style label is ${challenge.toUpperCase()}.'
-                    : 'Not quite. This one behaves more like ${challenge.toUpperCase()}.';
-              });
-            },
-            onNext: () {
-              setState(() {
-                _newChallenge();
-              });
-            },
+          SizedBox(height: 8),
+          Text(
+            'Markers show broad reference regions for education, not exact live detections. Live detections from your Raspberry Pi are shown in Live, Diary and Discoveries.',
+            style: TextStyle(
+              color: Colors.black54,
+              height: 1.35,
+            ),
           ),
-
-          const SizedBox(height: 24),
-          const Text(
-            'Reference species',
-            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900),
-          ),
-          const SizedBox(height: 6),
-          const Text(
-            'Tap a species to load a clean card with online image, description and playable sound when available.',
-            style: TextStyle(color: Colors.black54),
-          ),
-          const SizedBox(height: 12),
-
+          SizedBox(height: 10),
           Wrap(
             spacing: 8,
+            runSpacing: 8,
             children: [
-              ChoiceChip(
-                label: const Text('All'),
-                selected: filter == 'all',
-                onSelected: (_) => setState(() => filter = 'all'),
-              ),
-              ChoiceChip(
-                label: const Text('Birds'),
-                selected: filter == 'bird',
-                onSelected: (_) => setState(() => filter = 'bird'),
-              ),
-              ChoiceChip(
-                label: const Text('Bats'),
-                selected: filter == 'bat',
-                onSelected: (_) => setState(() => filter = 'bat'),
-              ),
-            ],
-          ),
-
-          const SizedBox(height: 14),
-
-          for (final profile in profiles)
-            Container(
-              margin: const EdgeInsets.only(bottom: 12),
-              child: _SoundSpeciesTile(
-                profile: profile,
-                isLoading: loadingKey ==
-                    '${profile.type}:${profile.scientificName.toLowerCase()}',
-                onTap: () => _openProfile(context, profile),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-
-  String _modeExplanation(String mode) {
-    if (mode == 'bat') {
-      return 'Bat echolocation is often ultrasonic. The phone may not reproduce it, but UltraMic can record it at high sample rates.';
-    }
-    if (mode == 'noise') {
-      return 'Urban noise can confuse classifiers. Higher noise usually lowers confidence.';
-    }
-    return 'Bird calls are usually audible and often contain repeated patterns that AI models can classify.';
-  }
-
-Future<void> _openProfile(
-  BuildContext context,
-  SpeciesProfile localProfile,
-) async {
-  final onlineService = context.read<OnlineSpeciesService>();
-
-  final event = DetectionEvent(
-    deviceId: 'sound-lab',
-    type: localProfile.type,
-    commonName: localProfile.commonName,
-    scientificName: localProfile.scientificName,
-    confidence: 1,
-    startTime: 0,
-    endTime: 0,
-    timestamp: DateTime.now(),
-  );
-
-  final key = '${localProfile.type}:${localProfile.scientificName.toLowerCase()}';
-
-  setState(() {
-    loadingKey = key;
-  });
-
-  SpeciesProfile profile = localProfile;
-
-  try {
-    profile = await onlineService.fetchProfile(event);
-  } catch (_) {
-    profile = localProfile;
-  }
-
-  if (!mounted) return;
-
-  setState(() {
-    loadingKey = null;
-  });
-
-  if (!context.mounted) return;
-
-  showModalBottomSheet(
-    context: context,
-    showDragHandle: true,
-    isScrollControlled: true,
-    builder: (_) => SpeciesInfoSheet(
-      event: event,
-      profile: profile,
-      isLoading: false,
-    ),
-  );
-}
-}
-
-class _LabModeCard extends StatelessWidget {
-  final String mode;
-  final ValueChanged<String> onChanged;
-
-  const _LabModeCard({
-    required this.mode,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Choose a signal type',
-            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              ChoiceChip(
-                label: const Text('🐦 Bird call'),
-                selected: mode == 'bird',
-                onSelected: (_) => onChanged('bird'),
-              ),
-              ChoiceChip(
-                label: const Text('🦇 Bat pulse'),
-                selected: mode == 'bat',
-                onSelected: (_) => onChanged('bat'),
-              ),
-              ChoiceChip(
-                label: const Text('🌫 Urban noise'),
-                selected: mode == 'noise',
-                onSelected: (_) => onChanged('noise'),
-              ),
+              _LegendChip(text: '🐦 Bird reference'),
+              _LegendChip(text: '🦇 Bat reference'),
+              _LegendChip(text: '🌍 Broad distribution'),
+              _LegendChip(text: '🔎 Tap marker for profile'),
             ],
           ),
         ],
@@ -338,186 +542,28 @@ class _LabModeCard extends StatelessWidget {
   }
 }
 
-class _FrequencyExplorer extends StatelessWidget {
-  final double frequency;
-  final ValueChanged<double> onChanged;
+class _LegendChip extends StatelessWidget {
+  final String text;
 
-  const _FrequencyExplorer({
-    required this.frequency,
-    required this.onChanged,
+  const _LegendChip({
+    required this.text,
   });
 
   @override
   Widget build(BuildContext context) {
-    final label = frequency < 12
-        ? 'Mostly audible: bird calls / human hearing'
-        : frequency < 20
-            ? 'Upper audible range'
-            : 'Ultrasonic: bat echolocation range';
-
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Frequency Explorer',
-            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            '${frequency.toStringAsFixed(0)} kHz · $label',
-            style: const TextStyle(color: Colors.black54),
-          ),
-          Slider(
-            value: frequency,
-            min: 2,
-            max: 120,
-            divisions: 59,
-            onChanged: onChanged,
-          ),
-          const Text(
-            'This explains why a phone speaker may play a “bat sound” but still fail to trigger BatDetect2: real echolocation is often above normal speaker and human hearing range.',
-            style: TextStyle(color: Colors.black54),
-          ),
-        ],
-      ),
+    return Chip(
+      label: Text(text),
+      visualDensity: VisualDensity.compact,
     );
   }
 }
 
-class _ConfidenceSimulator extends StatelessWidget {
-  final double noiseLevel;
-  final double confidence;
-  final ValueChanged<double> onChanged;
-
-  const _ConfidenceSimulator({
-    required this.noiseLevel,
-    required this.confidence,
-    required this.onChanged,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'AI Confidence Simulator',
-            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            'Noise level: ${(noiseLevel * 100).toStringAsFixed(0)}% · Simulated confidence: ${(confidence * 100).toStringAsFixed(0)}%',
-            style: const TextStyle(color: Colors.black54),
-          ),
-          Slider(
-            value: noiseLevel,
-            min: 0,
-            max: 1,
-            divisions: 20,
-            onChanged: onChanged,
-          ),
-          LinearProgressIndicator(value: confidence),
-        ],
-      ),
-    );
-  }
-}
-
-class _GuessSoundCard extends StatelessWidget {
-  final String challenge;
-  final String? result;
-  final ValueChanged<String> onGuess;
-  final VoidCallback onNext;
-
-  const _GuessSoundCard({
-    required this.challenge,
-    required this.result,
-    required this.onGuess,
-    required this.onNext,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final emoji = challenge == 'bird'
-        ? '🐦'
-        : challenge == 'bat'
-            ? '🦇'
-            : '🌫';
-
-    return Container(
-      padding: const EdgeInsets.all(18),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(26),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Guess the Sound',
-            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 18),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            '$emoji A mystery acoustic pattern appears. What would the AI probably label it as?',
-            style: const TextStyle(color: Colors.black54),
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 10,
-            runSpacing: 10,
-            children: [
-              FilledButton(
-                onPressed: () => onGuess('bird'),
-                child: const Text('🐦 Bird'),
-              ),
-              FilledButton(
-                onPressed: () => onGuess('bat'),
-                child: const Text('🦇 Bat'),
-              ),
-              OutlinedButton(
-                onPressed: () => onGuess('noise'),
-                child: const Text('🌫 Noise'),
-              ),
-            ],
-          ),
-          if (result != null) ...[
-            const SizedBox(height: 12),
-            Text(
-              result!,
-              style: const TextStyle(fontWeight: FontWeight.w800),
-            ),
-            const SizedBox(height: 8),
-            TextButton.icon(
-              onPressed: onNext,
-              icon: const Icon(Icons.refresh_rounded),
-              label: const Text('Next challenge'),
-            ),
-          ],
-        ],
-      ),
-    );
-  }
-}
-
-class _SoundSpeciesTile extends StatelessWidget {
+class _ReferenceSpeciesCard extends StatelessWidget {
   final SpeciesProfile profile;
   final bool isLoading;
   final VoidCallback onTap;
 
-  const _SoundSpeciesTile({
+  const _ReferenceSpeciesCard({
     required this.profile,
     required this.isLoading,
     required this.onTap,
@@ -527,28 +573,617 @@ class _SoundSpeciesTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final isBat = profile.type == 'bat';
 
-    return ListTile(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(20),
-      ),
-      tileColor: Colors.white,
-      leading: Text(
-        isBat ? '🦇' : '🐦',
-        style: const TextStyle(fontSize: 34),
-      ),
-      title: Text(
-        profile.commonName,
-        style: const TextStyle(fontWeight: FontWeight.w900),
-      ),
-      subtitle: Text(profile.scientificName),
-      trailing: isLoading
-          ? const SizedBox(
-              width: 22,
-              height: 22,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : const Icon(Icons.info_outline_rounded),
+    return InkWell(
       onTap: isLoading ? null : onTap,
+      borderRadius: BorderRadius.circular(24),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white.withOpacity(0.94),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: isBat
+                ? const Color(0xFFD6C9FF)
+                : const Color(0xFFCBE8C9),
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.04),
+              blurRadius: 12,
+              offset: const Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              width: 54,
+              height: 54,
+              decoration: BoxDecoration(
+                color: isBat
+                    ? const Color(0xFFE9E2FF)
+                    : const Color(0xFFEAF6E8),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Center(
+                child: Text(
+                  isBat ? '🦇' : '🐦',
+                  style: const TextStyle(fontSize: 30),
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    profile.commonName,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    profile.scientificName,
+                    style: const TextStyle(
+                      color: Colors.black54,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                  const SizedBox(height: 7),
+                  Text(
+                    profile.habitatNote,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.black54,
+                      fontSize: 12,
+                      height: 1.25,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            if (isLoading)
+              const SizedBox(
+                width: 24,
+                height: 24,
+                child: CircularProgressIndicator(strokeWidth: 2),
+              )
+            else
+              const Icon(Icons.chevron_right_rounded),
+          ],
+        ),
+      ),
     );
   }
 }
+
+class _FilterChip extends StatelessWidget {
+  final String label;
+  final String value;
+  final String group;
+  final ValueChanged<String> onTap;
+
+  const _FilterChip({
+    required this.label,
+    required this.value,
+    required this.group,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ChoiceChip(
+      label: Text(label),
+      selected: value == group,
+      onSelected: (_) => onTap(value),
+    );
+  }
+}
+
+class _AtlasMarker {
+  final String commonName;
+  final String scientificName;
+  final String type;
+  final LatLng position;
+  final String region;
+  final String regionGroup;
+  final String habitat;
+
+  const _AtlasMarker({
+    required this.commonName,
+    required this.scientificName,
+    required this.type,
+    required this.position,
+    required this.region,
+    required this.regionGroup,
+    required this.habitat,
+  });
+}
+
+const List<_AtlasMarker> _atlasMarkers = [
+  // Birds: Common Blackbird
+  _AtlasMarker(
+    commonName: 'Common Blackbird',
+    scientificName: 'Turdus merula',
+    type: 'bird',
+    position: LatLng(51.5, -0.1),
+    region: 'United Kingdom and western Europe',
+    regionGroup: 'europe',
+    habitat: 'Woodland edges, gardens, parks and shrub-rich areas.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Blackbird',
+    scientificName: 'Turdus merula',
+    type: 'bird',
+    position: LatLng(52.5, 13.4),
+    region: 'Central Europe',
+    regionGroup: 'europe',
+    habitat: 'Urban parks, hedges, gardens and woodland margins.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Blackbird',
+    scientificName: 'Turdus merula',
+    type: 'bird',
+    position: LatLng(41.9, 12.5),
+    region: 'Southern Europe and the Mediterranean',
+    regionGroup: 'europe',
+    habitat: 'Gardens, orchards, parks and wooded urban areas.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Blackbird',
+    scientificName: 'Turdus merula',
+    type: 'bird',
+    position: LatLng(33.6, -7.6),
+    region: 'North Africa',
+    regionGroup: 'worldwide',
+    habitat: 'Wooded gardens, irrigated areas and urban green spaces.',
+  ),
+
+  // Birds: European Robin
+  _AtlasMarker(
+    commonName: 'European Robin',
+    scientificName: 'Erithacus rubecula',
+    type: 'bird',
+    position: LatLng(48.8, 2.3),
+    region: 'Western Europe',
+    regionGroup: 'europe',
+    habitat: 'Woodlands, hedgerows, parks and gardens.',
+  ),
+  _AtlasMarker(
+    commonName: 'European Robin',
+    scientificName: 'Erithacus rubecula',
+    type: 'bird',
+    position: LatLng(40.4, -3.7),
+    region: 'Iberian Peninsula',
+    regionGroup: 'europe',
+    habitat: 'Woodland, gardens, farmland edges and wintering areas.',
+  ),
+  _AtlasMarker(
+    commonName: 'European Robin',
+    scientificName: 'Erithacus rubecula',
+    type: 'bird',
+    position: LatLng(45.8, 16.0),
+    region: 'Southeastern Europe',
+    regionGroup: 'europe',
+    habitat: 'Mixed woodland, parks, shrubs and garden vegetation.',
+  ),
+
+  // Birds: Great Tit
+  _AtlasMarker(
+    commonName: 'Great Tit',
+    scientificName: 'Parus major',
+    type: 'bird',
+    position: LatLng(52.5, 13.4),
+    region: 'Central Europe',
+    regionGroup: 'europe',
+    habitat: 'Trees, woodland, parks, gardens and nest boxes.',
+  ),
+  _AtlasMarker(
+    commonName: 'Great Tit',
+    scientificName: 'Parus major',
+    type: 'bird',
+    position: LatLng(59.3, 18.1),
+    region: 'Northern Europe',
+    regionGroup: 'europe',
+    habitat: 'Mixed forest, garden trees and urban parks.',
+  ),
+  _AtlasMarker(
+    commonName: 'Great Tit',
+    scientificName: 'Parus major',
+    type: 'bird',
+    position: LatLng(39.9, 116.4),
+    region: 'East Asia',
+    regionGroup: 'worldwide',
+    habitat: 'Woodland, farmland edges, city parks and gardens.',
+  ),
+
+  // Birds: Blue Tit
+  _AtlasMarker(
+    commonName: 'Blue Tit',
+    scientificName: 'Cyanistes caeruleus',
+    type: 'bird',
+    position: LatLng(52.1, 5.2),
+    region: 'Western and central Europe',
+    regionGroup: 'europe',
+    habitat: 'Deciduous woodland, gardens and urban parks.',
+  ),
+  _AtlasMarker(
+    commonName: 'Blue Tit',
+    scientificName: 'Cyanistes caeruleus',
+    type: 'bird',
+    position: LatLng(50.8, 4.4),
+    region: 'Low Countries and western Europe',
+    regionGroup: 'europe',
+    habitat: 'Tree-rich gardens, parks and woodland edges.',
+  ),
+
+  // Birds: Eurasian Wren
+  _AtlasMarker(
+    commonName: 'Eurasian Wren',
+    scientificName: 'Troglodytes troglodytes',
+    type: 'bird',
+    position: LatLng(54.0, -2.0),
+    region: 'British Isles',
+    regionGroup: 'europe',
+    habitat: 'Dense shrubs, hedges, woodland floor and tangled vegetation.',
+  ),
+  _AtlasMarker(
+    commonName: 'Eurasian Wren',
+    scientificName: 'Troglodytes troglodytes',
+    type: 'bird',
+    position: LatLng(47.4, 8.5),
+    region: 'Central Europe',
+    regionGroup: 'europe',
+    habitat: 'Moist woodland, dense undergrowth and garden shrubs.',
+  ),
+
+  // Birds: House Sparrow
+  _AtlasMarker(
+    commonName: 'House Sparrow',
+    scientificName: 'Passer domesticus',
+    type: 'bird',
+    position: LatLng(51.5, -0.1),
+    region: 'Urban Europe',
+    regionGroup: 'worldwide',
+    habitat: 'Urban areas, farms, gardens and buildings.',
+  ),
+  _AtlasMarker(
+    commonName: 'House Sparrow',
+    scientificName: 'Passer domesticus',
+    type: 'bird',
+    position: LatLng(28.6, 77.2),
+    region: 'South Asia',
+    regionGroup: 'worldwide',
+    habitat: 'Human settlements, markets, homes and farmland.',
+  ),
+  _AtlasMarker(
+    commonName: 'House Sparrow',
+    scientificName: 'Passer domesticus',
+    type: 'bird',
+    position: LatLng(40.7, -74.0),
+    region: 'North America introduced range',
+    regionGroup: 'worldwide',
+    habitat: 'Cities, suburbs, farms and parks.',
+  ),
+  _AtlasMarker(
+    commonName: 'House Sparrow',
+    scientificName: 'Passer domesticus',
+    type: 'bird',
+    position: LatLng(30.0, 31.2),
+    region: 'North Africa and Middle East cities',
+    regionGroup: 'worldwide',
+    habitat: 'Buildings, streets, gardens and agricultural settlements.',
+  ),
+
+  // Birds: Wood Pigeon
+  _AtlasMarker(
+    commonName: 'Wood Pigeon',
+    scientificName: 'Columba palumbus',
+    type: 'bird',
+    position: LatLng(41.9, 12.5),
+    region: 'Southern Europe',
+    regionGroup: 'europe',
+    habitat: 'Woodland, farmland, parks and city trees.',
+  ),
+  _AtlasMarker(
+    commonName: 'Wood Pigeon',
+    scientificName: 'Columba palumbus',
+    type: 'bird',
+    position: LatLng(53.3, -6.3),
+    region: 'Ireland and western Europe',
+    regionGroup: 'europe',
+    habitat: 'Parks, gardens, farmland and wooded areas.',
+  ),
+
+  // Birds: Carrion Crow
+  _AtlasMarker(
+    commonName: 'Carrion Crow',
+    scientificName: 'Corvus corone',
+    type: 'bird',
+    position: LatLng(50.1, 8.7),
+    region: 'Western and central Europe',
+    regionGroup: 'europe',
+    habitat: 'Open land, woodland edges, cities and farmland.',
+  ),
+  _AtlasMarker(
+    commonName: 'Carrion Crow',
+    scientificName: 'Corvus corone',
+    type: 'bird',
+    position: LatLng(35.7, 139.7),
+    region: 'East Asian crow populations',
+    regionGroup: 'worldwide',
+    habitat: 'Urban areas, farmland, coastal edges and open land.',
+  ),
+
+  // Birds: Eurasian Magpie
+  _AtlasMarker(
+    commonName: 'Eurasian Magpie',
+    scientificName: 'Pica pica',
+    type: 'bird',
+    position: LatLng(52.2, 21.0),
+    region: 'Europe and temperate Asia',
+    regionGroup: 'europe',
+    habitat: 'Open woodland, cities, farmland and parks.',
+  ),
+  _AtlasMarker(
+    commonName: 'Eurasian Magpie',
+    scientificName: 'Pica pica',
+    type: 'bird',
+    position: LatLng(39.9, 116.4),
+    region: 'East Asia',
+    regionGroup: 'worldwide',
+    habitat: 'Urban trees, farmland, parks and open countryside.',
+  ),
+
+  // Birds: Common Chaffinch
+  _AtlasMarker(
+    commonName: 'Common Chaffinch',
+    scientificName: 'Fringilla coelebs',
+    type: 'bird',
+    position: LatLng(46.2, 6.1),
+    region: 'Europe and western Asia',
+    regionGroup: 'europe',
+    habitat: 'Woodland, gardens, parks and tree-rich farmland.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Chaffinch',
+    scientificName: 'Fringilla coelebs',
+    type: 'bird',
+    position: LatLng(60.2, 24.9),
+    region: 'Northern Europe breeding areas',
+    regionGroup: 'europe',
+    habitat: 'Coniferous and mixed forest, gardens and woodland edges.',
+  ),
+
+  // Birds: Common Cuckoo
+  _AtlasMarker(
+    commonName: 'Common Cuckoo',
+    scientificName: 'Cuculus canorus',
+    type: 'bird',
+    position: LatLng(55.7, 12.6),
+    region: 'European breeding range',
+    regionGroup: 'europe',
+    habitat: 'Open woodland, reedbeds, heathland and farmland edges.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Cuckoo',
+    scientificName: 'Cuculus canorus',
+    type: 'bird',
+    position: LatLng(-1.3, 36.8),
+    region: 'African wintering region',
+    regionGroup: 'worldwide',
+    habitat: 'Seasonal habitats during migration and wintering.',
+  ),
+
+  // Birds: Common Raven
+  _AtlasMarker(
+    commonName: 'Common Raven',
+    scientificName: 'Corvus corax',
+    type: 'bird',
+    position: LatLng(64.1, -21.9),
+    region: 'North Atlantic and northern Europe',
+    regionGroup: 'worldwide',
+    habitat: 'Mountains, coasts, forests, open land and remote landscapes.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Raven',
+    scientificName: 'Corvus corax',
+    type: 'bird',
+    position: LatLng(51.0, -115.0),
+    region: 'North America',
+    regionGroup: 'worldwide',
+    habitat: 'Forests, mountains, cliffs, coastlines and open country.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Raven',
+    scientificName: 'Corvus corax',
+    type: 'bird',
+    position: LatLng(43.2, 76.9),
+    region: 'Central Asia',
+    regionGroup: 'worldwide',
+    habitat: 'Mountains, steppe, cliffs and open landscapes.',
+  ),
+
+  // Bats: Common Pipistrelle
+  _AtlasMarker(
+    commonName: 'Common Pipistrelle',
+    scientificName: 'Pipistrellus pipistrellus',
+    type: 'bat',
+    position: LatLng(51.5, -0.1),
+    region: 'United Kingdom and western Europe',
+    regionGroup: 'europe',
+    habitat: 'Urban parks, tree lines, gardens and water edges at dusk.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Pipistrelle',
+    scientificName: 'Pipistrellus pipistrellus',
+    type: 'bat',
+    position: LatLng(48.8, 2.3),
+    region: 'Western Europe',
+    regionGroup: 'europe',
+    habitat: 'Buildings, riverside trees, parks and hedgerows.',
+  ),
+  _AtlasMarker(
+    commonName: 'Common Pipistrelle',
+    scientificName: 'Pipistrellus pipistrellus',
+    type: 'bat',
+    position: LatLng(40.4, -3.7),
+    region: 'Southern Europe',
+    regionGroup: 'europe',
+    habitat: 'Warm urban edges, gardens, wetlands and tree lines.',
+  ),
+
+  // Bats: Soprano Pipistrelle
+  _AtlasMarker(
+    commonName: 'Soprano Pipistrelle',
+    scientificName: 'Pipistrellus pygmaeus',
+    type: 'bat',
+    position: LatLng(55.9, -3.2),
+    region: 'Northern and western Europe',
+    regionGroup: 'europe',
+    habitat: 'Wetlands, rivers, canals, lakes and woodland edges.',
+  ),
+  _AtlasMarker(
+    commonName: 'Soprano Pipistrelle',
+    scientificName: 'Pipistrellus pygmaeus',
+    type: 'bat',
+    position: LatLng(52.2, 21.0),
+    region: 'Central and eastern Europe',
+    regionGroup: 'europe',
+    habitat: 'Water-side habitats, woodland edges and urban green corridors.',
+  ),
+
+  // Bats: Nathusius’ Pipistrelle
+  _AtlasMarker(
+    commonName: 'Nathusius’ Pipistrelle',
+    scientificName: 'Pipistrellus nathusii',
+    type: 'bat',
+    position: LatLng(54.7, 25.3),
+    region: 'Eastern and central Europe',
+    regionGroup: 'europe',
+    habitat: 'Wetlands, lakes, woodland edges and migration corridors.',
+  ),
+  _AtlasMarker(
+    commonName: 'Nathusius’ Pipistrelle',
+    scientificName: 'Pipistrellus nathusii',
+    type: 'bat',
+    position: LatLng(53.5, 10.0),
+    region: 'Northern European migration route',
+    regionGroup: 'europe',
+    habitat: 'Coastal zones, wetlands and river systems.',
+  ),
+
+  // Bats: Daubenton’s Bat
+  _AtlasMarker(
+    commonName: 'Daubenton’s Bat',
+    scientificName: 'Myotis daubentonii',
+    type: 'bat',
+    position: LatLng(52.2, 4.9),
+    region: 'Western Europe',
+    regionGroup: 'europe',
+    habitat: 'Feeds low over rivers, lakes, canals and ponds.',
+  ),
+  _AtlasMarker(
+    commonName: 'Daubenton’s Bat',
+    scientificName: 'Myotis daubentonii',
+    type: 'bat',
+    position: LatLng(59.9, 10.7),
+    region: 'Northern Europe',
+    regionGroup: 'europe',
+    habitat: 'Freshwater edges, forest lakes and sheltered rivers.',
+  ),
+  _AtlasMarker(
+    commonName: 'Daubenton’s Bat',
+    scientificName: 'Myotis daubentonii',
+    type: 'bat',
+    position: LatLng(48.2, 16.4),
+    region: 'Central Europe',
+    regionGroup: 'europe',
+    habitat: 'Rivers, canals, lakes, bridges and tree roosts.',
+  ),
+
+  // Bats: Brown Long-eared Bat
+  _AtlasMarker(
+    commonName: 'Brown Long-eared Bat',
+    scientificName: 'Plecotus auritus',
+    type: 'bat',
+    position: LatLng(47.4, 8.5),
+    region: 'Central Europe',
+    regionGroup: 'europe',
+    habitat: 'Woodland, old buildings, tree cavities and quiet roosts.',
+  ),
+  _AtlasMarker(
+    commonName: 'Brown Long-eared Bat',
+    scientificName: 'Plecotus auritus',
+    type: 'bat',
+    position: LatLng(53.4, -2.9),
+    region: 'British Isles',
+    regionGroup: 'europe',
+    habitat: 'Woodland, barns, lofts, old trees and sheltered gardens.',
+  ),
+
+  // Bats: Serotine
+  _AtlasMarker(
+    commonName: 'Serotine',
+    scientificName: 'Eptesicus serotinus',
+    type: 'bat',
+    position: LatLng(50.8, 4.4),
+    region: 'Western Europe',
+    regionGroup: 'europe',
+    habitat: 'Villages, towns, pasture edges, tree lines and open spaces.',
+  ),
+  _AtlasMarker(
+    commonName: 'Serotine',
+    scientificName: 'Eptesicus serotinus',
+    type: 'bat',
+    position: LatLng(44.4, 26.1),
+    region: 'Southeastern Europe',
+    regionGroup: 'europe',
+    habitat: 'Open farmland, settlements, woodland edges and warm roosts.',
+  ),
+
+  // Bats: Leisler’s Bat
+  _AtlasMarker(
+    commonName: 'Leisler’s Bat',
+    scientificName: 'Nyctalus leisleri',
+    type: 'bat',
+    position: LatLng(53.3, -6.3),
+    region: 'Ireland and western Europe',
+    regionGroup: 'europe',
+    habitat: 'Woodland edges, open parkland, lakesides and tree roosts.',
+  ),
+  _AtlasMarker(
+    commonName: 'Leisler’s Bat',
+    scientificName: 'Nyctalus leisleri',
+    type: 'bat',
+    position: LatLng(45.5, 9.2),
+    region: 'Southern and central Europe',
+    regionGroup: 'europe',
+    habitat: 'Forest edges, open habitats, parks and larger tree lines.',
+  ),
+
+  // Bats: Lesser Horseshoe Bat
+  _AtlasMarker(
+    commonName: 'Lesser Horseshoe Bat',
+    scientificName: 'Rhinolophus hipposideros',
+    type: 'bat',
+    position: LatLng(45.8, 6.1),
+    region: 'Western and southern Europe',
+    regionGroup: 'europe',
+    habitat: 'Caves, old buildings, woodland valleys and sheltered landscapes.',
+  ),
+  _AtlasMarker(
+    commonName: 'Lesser Horseshoe Bat',
+    scientificName: 'Rhinolophus hipposideros',
+    type: 'bat',
+    position: LatLng(42.7, 23.3),
+    region: 'Balkan region',
+    regionGroup: 'europe',
+    habitat: 'Karst areas, caves, woodland, old buildings and valleys.',
+  ),
+];

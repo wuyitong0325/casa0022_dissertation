@@ -206,7 +206,7 @@ class _RootShellState extends State<RootShell> {
           ),
           NavigationDestination(
             icon: Icon(Icons.graphic_eq_rounded),
-            label: 'Sound Lab',
+            label: 'Atlas',
           ),
           NavigationDestination(
             icon: Icon(Icons.emoji_events_rounded),
