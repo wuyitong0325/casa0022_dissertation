@@ -21,9 +21,25 @@ class _SoundExplorerPageState extends State<SoundExplorerPage> {
   String? loadingKey;
   _AtlasMarker? selectedMarker;
 
+  final TextEditingController searchController = TextEditingController();
+  final FocusNode searchFocusNode = FocusNode();
+  bool isSearching = false;
+
+  @override
+  void dispose() {
+    searchController.dispose();
+    searchFocusNode.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final profiles = SpeciesRepository.curatedProfiles;
+    final searchProfiles = _buildSearchProfiles(profiles);
+    final searchSuggestions = _searchSuggestions(
+      searchController.text,
+      searchProfiles,
+    );
     final markers = _filteredMarkers();
 
     return Scaffold(
@@ -45,6 +61,24 @@ class _SoundExplorerPageState extends State<SoundExplorerPage> {
             'Tap a bird or bat marker to learn where the reference species is commonly found, then open its full species profile.',
             style: TextStyle(color: Colors.black54),
           ),
+          const SizedBox(height: 16),
+
+          _AtlasSearchCard(
+            controller: searchController,
+            focusNode: searchFocusNode,
+            isSearching: isSearching,
+            suggestions: searchSuggestions,
+            onChanged: (_) => setState(() {}),
+            onSubmitted: _openSearchResult,
+            onSuggestionTap: (profile) {
+              searchController.text = profile.commonName;
+              _openProfile(
+                context: context,
+                localProfile: profile,
+              );
+            },
+          ),
+
           const SizedBox(height: 16),
 
           _AtlasMapCard(
@@ -167,6 +201,92 @@ class _SoundExplorerPageState extends State<SoundExplorerPage> {
     }).toList();
   }
 
+  List<SpeciesProfile> _buildSearchProfiles(List<SpeciesProfile> profiles) {
+    final results = <SpeciesProfile>[
+      ...profiles,
+    ];
+
+    for (final marker in _atlasMarkers) {
+      final exists = results.any(
+        (profile) =>
+            profile.commonName.toLowerCase() ==
+                marker.commonName.toLowerCase() ||
+            profile.scientificName.toLowerCase() ==
+                marker.scientificName.toLowerCase(),
+      );
+
+      if (!exists) {
+        results.add(
+          SpeciesProfile(
+            commonName: marker.commonName,
+            scientificName: marker.scientificName,
+            type: marker.type,
+            description:
+                '${marker.commonName} is included as a searchable reference species in the Park Life Monitor atlas.',
+            habitatNote: marker.habitat,
+            funFact: marker.region,
+          ),
+        );
+      }
+    }
+
+    return results;
+  }
+
+  List<SpeciesProfile> _searchSuggestions(
+    String query,
+    List<SpeciesProfile> profiles,
+  ) {
+    final normalisedQuery = _normaliseSearchText(query);
+
+    final ranked = profiles.where((profile) {
+      if (normalisedQuery.isEmpty) {
+        return _defaultSuggestionNames.contains(
+          profile.commonName.toLowerCase(),
+        );
+      }
+
+      return _normaliseSearchText(profile.commonName)
+              .contains(normalisedQuery) ||
+          _normaliseSearchText(profile.scientificName)
+              .contains(normalisedQuery);
+    }).toList();
+
+    ranked.sort((a, b) {
+      if (normalisedQuery.isEmpty) {
+        final aIndex = _defaultSuggestionNames.indexOf(
+          a.commonName.toLowerCase(),
+        );
+        final bIndex = _defaultSuggestionNames.indexOf(
+          b.commonName.toLowerCase(),
+        );
+
+        final safeA = aIndex == -1 ? 999 : aIndex;
+        final safeB = bIndex == -1 ? 999 : bIndex;
+
+        if (safeA != safeB) return safeA.compareTo(safeB);
+      }
+
+      final aCommon = _normaliseSearchText(a.commonName);
+      final bCommon = _normaliseSearchText(b.commonName);
+      final aScientific = _normaliseSearchText(a.scientificName);
+      final bScientific = _normaliseSearchText(b.scientificName);
+
+      final aStarts =
+          aCommon.startsWith(normalisedQuery) ||
+          aScientific.startsWith(normalisedQuery);
+      final bStarts =
+          bCommon.startsWith(normalisedQuery) ||
+          bScientific.startsWith(normalisedQuery);
+
+      if (aStarts != bStarts) return aStarts ? -1 : 1;
+
+      return a.commonName.compareTo(b.commonName);
+    });
+
+    return ranked.take(7).toList();
+  }
+
   SpeciesProfile _profileForMarker(
     _AtlasMarker marker,
     List<SpeciesProfile> profiles,
@@ -188,6 +308,125 @@ class _SoundExplorerPageState extends State<SoundExplorerPage> {
       habitatNote: marker.habitat,
       funFact: marker.region,
     );
+  }
+
+  Future<void> _openSearchResult(String rawQuery) async {
+    final query = rawQuery.trim();
+
+    if (query.isEmpty) {
+      _showAtlasMessage('Type a common name or scientific name first.');
+      return;
+    }
+
+    final profiles = _buildSearchProfiles(SpeciesRepository.curatedProfiles);
+    final match = _findBestProfileMatch(query, profiles);
+    final profile = match ?? _profileFromSearchQuery(query, profiles);
+
+    searchFocusNode.unfocus();
+
+    setState(() {
+      isSearching = true;
+    });
+
+    try {
+      await _openProfile(
+        context: context,
+        localProfile: profile,
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          isSearching = false;
+        });
+      }
+    }
+  }
+
+  SpeciesProfile? _findBestProfileMatch(
+    String query,
+    List<SpeciesProfile> profiles,
+  ) {
+    final normalisedQuery = _normaliseSearchText(query);
+
+    for (final profile in profiles) {
+      if (_normaliseSearchText(profile.commonName) == normalisedQuery ||
+          _normaliseSearchText(profile.scientificName) == normalisedQuery) {
+        return profile;
+      }
+    }
+
+    for (final profile in profiles) {
+      if (_normaliseSearchText(profile.commonName).contains(normalisedQuery) ||
+          _normaliseSearchText(profile.scientificName)
+              .contains(normalisedQuery)) {
+        return profile;
+      }
+    }
+
+    return null;
+  }
+
+  SpeciesProfile _profileFromSearchQuery(
+    String query,
+    List<SpeciesProfile> profiles,
+  ) {
+    final inferredType = _inferTypeFromQuery(query, profiles);
+    final cleanedName = query.trim();
+
+    return SpeciesProfile(
+      commonName: cleanedName,
+      scientificName: cleanedName,
+      type: inferredType,
+      description:
+          '$cleanedName was searched from the Atlas. Online information will be loaded when available.',
+      habitatNote: inferredType == 'bat'
+          ? 'Bat species are often associated with night-time activity, roosting sites, trees, water and insect-rich areas.'
+          : 'Bird species may be associated with parks, woodland, gardens, wetlands or urban green corridors depending on the species.',
+      funFact: inferredType == 'bat'
+          ? 'Many bats use ultrasonic echolocation calls that need special recording equipment to analyse.'
+          : 'Acoustic monitoring can help reveal bird activity that may be missed by visual observation.',
+    );
+  }
+
+  String _inferTypeFromQuery(
+    String query,
+    List<SpeciesProfile> profiles,
+  ) {
+    final normalisedQuery = _normaliseSearchText(query);
+
+    for (final profile in profiles) {
+      if (_normaliseSearchText(profile.commonName).contains(normalisedQuery) ||
+          _normaliseSearchText(profile.scientificName)
+              .contains(normalisedQuery) ||
+          normalisedQuery.contains(_normaliseSearchText(profile.commonName)) ||
+          normalisedQuery
+              .contains(_normaliseSearchText(profile.scientificName))) {
+        return profile.type;
+      }
+    }
+
+    const batTerms = [
+      'bat',
+      'pipistrelle',
+      'pipistrellus',
+      'serotine',
+      'eptesicus',
+      'noctule',
+      'nyctalus',
+      'myotis',
+      'rhinolophus',
+      'plecotus',
+      'daubenton',
+      'natterer',
+      'leisler',
+      'horseshoe',
+    ];
+
+    if (batTerms.any(normalisedQuery.contains)) {
+      return 'bat';
+    }
+
+    return 'bird';
   }
 
   Future<void> _openProfile({
@@ -255,7 +494,164 @@ class _SoundExplorerPageState extends State<SoundExplorerPage> {
   String _markerKey(_AtlasMarker marker) {
     return '${marker.type}:${marker.scientificName.toLowerCase().trim()}';
   }
+
+  String _normaliseSearchText(String value) {
+    return value.toLowerCase().trim().replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  void _showAtlasMessage(String message) {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
 }
+
+class _AtlasSearchCard extends StatelessWidget {
+  final TextEditingController controller;
+  final FocusNode focusNode;
+  final bool isSearching;
+  final List<SpeciesProfile> suggestions;
+  final ValueChanged<String> onChanged;
+  final ValueChanged<String> onSubmitted;
+  final ValueChanged<SpeciesProfile> onSuggestionTap;
+
+  const _AtlasSearchCard({
+    required this.controller,
+    required this.focusNode,
+    required this.isSearching,
+    required this.suggestions,
+    required this.onChanged,
+    required this.onSubmitted,
+    required this.onSuggestionTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.95),
+        borderRadius: BorderRadius.circular(26),
+        border: Border.all(color: const Color(0xFFDDE8DA)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.045),
+            blurRadius: 14,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Search the atlas',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 5),
+          const Text(
+            'Search by common name, scientific name, or partial name. Results open the same species card with images, notes and audio where available.',
+            style: TextStyle(
+              color: Colors.black54,
+              height: 1.35,
+            ),
+          ),
+          const SizedBox(height: 14),
+          TextField(
+            controller: controller,
+            focusNode: focusNode,
+            textInputAction: TextInputAction.search,
+            onChanged: onChanged,
+            onSubmitted: onSubmitted,
+            decoration: InputDecoration(
+              hintText: 'Search common or scientific name...',
+              prefixIcon: const Icon(Icons.search_rounded),
+              suffixIcon: isSearching
+                  ? const Padding(
+                      padding: EdgeInsets.all(13),
+                      child: SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      ),
+                    )
+                  : IconButton(
+                      tooltip: 'Search',
+                      onPressed: () => onSubmitted(controller.text),
+                      icon: const Icon(Icons.arrow_forward_rounded),
+                    ),
+              filled: true,
+              fillColor: const Color(0xFFF5F9F3),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(20),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+if (controller.text.trim().isEmpty)
+  const Text(
+    'Enter a common name or scientific name, for example Turdus merula or Pipistrellus pipistrellus.',
+    style: TextStyle(
+      color: Colors.black54,
+      height: 1.35,
+    ),
+  )
+else if (suggestions.isEmpty)
+  const Text(
+    'No close local match found. Press search to try loading it online.',
+    style: TextStyle(color: Colors.black54),
+  )
+else ...[
+  const Text(
+    'Matching species',
+    style: TextStyle(
+      fontWeight: FontWeight.w900,
+      color: Colors.black87,
+    ),
+  ),
+  const SizedBox(height: 8),
+  Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: suggestions.map((profile) {
+      final isBat = profile.type == 'bat';
+
+      return ActionChip(
+        avatar: Text(isBat ? '🦇' : '🐦'),
+        label: Text(
+          profile.commonName,
+          overflow: TextOverflow.ellipsis,
+        ),
+        onPressed: () => onSuggestionTap(profile),
+      );
+    }).toList(),
+  ),
+],
+        ],
+      ),
+    );
+  }
+}
+
+const List<String> _defaultSuggestionNames = [
+  'common blackbird',
+  'european robin',
+  'great tit',
+  'blue tit',
+  'common pipistrelle',
+  'soprano pipistrelle',
+  'serotine',
+  'noctule',
+];
 
 class _AtlasMapCard extends StatelessWidget {
   final List<_AtlasMarker> markers;
