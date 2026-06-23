@@ -209,7 +209,8 @@
           The web version is provided as an interface preview in the browser.
           Because browsers cannot connect directly to a standard MQTT TCP port,
           live MQTT detections are intended for the Android APK or a local Flutter
-          run configuration. Users who run the source code themselves should configure
+          run configuration. The Android APK provided here is configured for the
+          exhibition demo. Users who run the source code themselves should configure
           their own xeno-canto API key for online bird sound playback and their own
           MQTT broker credentials for live detection data.
         </p>
@@ -219,8 +220,8 @@ flutter run -d chrome --dart-define=XENO_CANTO_API_KEY=your_key_here
         </div>
 
         <p>
-          Demo MQTT credentials may be provided during the exhibition. They should
-          not be used for sensitive or long-term data.
+          The exhibition MQTT setup is used only for demonstration data. It should
+          not be used for sensitive or long-term deployments.
         </p>
       </div>
     </section>
