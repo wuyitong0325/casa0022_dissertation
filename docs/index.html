@@ -157,11 +157,12 @@
       <p>
         Park Life Monitor is an interactive bird and bat detection app for urban parks.
         A Raspberry Pi listens to environmental sounds, detects birds during the day
-        and bats at night, and sends live results to a Flutter app using MQTT.
+        and bats at night, and sends live results to a Flutter Android app using MQTT.
+        The web version is provided as an interface preview for visitors.
       </p>
 
       <div class="buttons">
-        <a class="btn" href="./app/">Open Web Version</a>
+        <a class="btn" href="./app/">Open Web Preview</a>
         <a class="btn secondary" href="./downloads/park_life_monitor.apk">Download Android APK</a>
         <a class="btn light" href="https://github.com/wuyitong0325/casa0022_dissertation">View GitHub Repository</a>
         <!-- TODO: replace this demo video link after you upload your video -->
@@ -173,7 +174,7 @@
       <div class="card">
         <h2>What it does</h2>
         <ul>
-          <li>Shows live animated bird and bat detection alerts.</li>
+          <li>Shows live animated bird and bat detection alerts in the Android app.</li>
           <li>Displays species information, images, and sound examples.</li>
           <li>Records discoveries in a diary-style interface.</li>
           <li>Summarises activity using simple charts and insights.</li>
@@ -195,7 +196,7 @@
         <ul>
           <li>Raspberry Pi for edge sensing and audio capture.</li>
           <li>Flutter and Dart for the mobile/web app.</li>
-          <li>MQTT for live communication between the device and app.</li>
+          <li>MQTT for live communication between the Raspberry Pi and Android app.</li>
           <li>BirdNET/acoupi-related tools for bird sound analysis.</li>
           <li>BatDetect2 for bat sound analysis.</li>
           <li>xeno-canto, Biodiversity Ireland, GBIF, iNaturalist, and Wikipedia are used for reference data where appropriate.</li>
@@ -205,10 +206,12 @@
       <div class="card">
         <h2>Setup notes</h2>
         <p>
-          The public web version and APK are provided for demonstration. Users who
-          run the source code themselves should configure their own xeno-canto API
-          key for online bird sound playback and their own MQTT broker credentials
-          for live detection data.
+          The web version is provided as an interface preview in the browser.
+          Because browsers cannot connect directly to a standard MQTT TCP port,
+          live MQTT detections are intended for the Android APK or a local Flutter
+          run configuration. Users who run the source code themselves should configure
+          their own xeno-canto API key for online bird sound playback and their own
+          MQTT broker credentials for live detection data.
         </p>
 
         <div class="mono">
