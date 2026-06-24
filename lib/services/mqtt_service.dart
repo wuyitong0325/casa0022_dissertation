@@ -211,6 +211,57 @@ class MqttService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<bool> publishModeCommand(String mode) async {
+    final normalisedMode = mode.toLowerCase().trim();
+
+    if (!['bird', 'bat', 'stop'].contains(normalisedMode)) {
+      debugPrint('Invalid exhibition mode command: $mode');
+      return false;
+    }
+
+    final client = _client;
+
+    if (client == null ||
+        client.connectionStatus?.state != MqttConnectionState.connected) {
+      debugPrint('Cannot publish exhibition command. MQTT is not connected.');
+      lastRawMessage =
+          '[COMMAND FAILED] MQTT not connected. Tried to send: $normalisedMode';
+      notifyListeners();
+      return false;
+    }
+
+    final topic = '${AppMqttConfig.baseTopic}/command/mode';
+    final builder = MqttClientPayloadBuilder();
+    builder.addString(normalisedMode);
+
+    try {
+      client.publishMessage(
+        topic,
+        MqttQos.atLeastOnce,
+        builder.payload!,
+      );
+
+      lastRawMessage = '[COMMAND -> $topic] $normalisedMode';
+
+      if (normalisedMode == 'bird') {
+        currentMode = 'bird';
+      } else if (normalisedMode == 'bat') {
+        currentMode = 'bat';
+      } else if (normalisedMode == 'stop') {
+        currentMode = 'none';
+      }
+
+      debugPrint('Published exhibition mode command: $normalisedMode');
+      notifyListeners();
+      return true;
+    } catch (e) {
+      debugPrint('Failed to publish exhibition command: $e');
+      lastRawMessage = '[COMMAND ERROR] $e';
+      notifyListeners();
+      return false;
+    }
+  }
+
   void _onConnected() {
     debugPrint('MQTT connected');
     isConnected = true;

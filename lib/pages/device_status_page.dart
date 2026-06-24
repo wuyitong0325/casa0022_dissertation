@@ -6,6 +6,28 @@ import '../services/mqtt_service.dart';
 class DeviceStatusPage extends StatelessWidget {
   const DeviceStatusPage({super.key});
 
+  Future<void> _sendModeCommand(
+    BuildContext context,
+    MqttService mqtt,
+    String mode,
+    String label,
+  ) async {
+    final success = await mqtt.publishModeCommand(mode);
+
+    if (!context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          success
+              ? '$label command sent to Raspberry Pi.'
+              : 'Failed to send $label command. Check MQTT connection.',
+        ),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final mqtt = context.watch<MqttService>();
@@ -17,6 +39,11 @@ class DeviceStatusPage extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          _ExhibitionControlCard(
+            mqtt: mqtt,
+            onSendCommand: _sendModeCommand,
+          ),
+          const SizedBox(height: 16),
           _StatusTile(
             icon: Icons.router_rounded,
             title: 'MQTT broker',
@@ -83,6 +110,164 @@ class DeviceStatusPage extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ExhibitionControlCard extends StatelessWidget {
+  final MqttService mqtt;
+  final Future<void> Function(
+    BuildContext context,
+    MqttService mqtt,
+    String mode,
+    String label,
+  ) onSendCommand;
+
+  const _ExhibitionControlCard({
+    required this.mqtt,
+    required this.onSendCommand,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final connected = mqtt.isConnected;
+
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: connected
+              ? const Color(0xFFCBE8C9)
+              : const Color(0xFFFFD2D2),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.045),
+            blurRadius: 14,
+            offset: const Offset(0, 7),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              CircleAvatar(
+                backgroundColor: connected
+                    ? const Color(0xFFE1F7E7)
+                    : const Color(0xFFFFE8E8),
+                child: Icon(
+                  Icons.tune_rounded,
+                  color: connected ? Colors.green : Colors.red,
+                ),
+              ),
+              const SizedBox(width: 12),
+              const Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Exhibition Manual Control',
+                      style: TextStyle(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    SizedBox(height: 3),
+                    Text(
+                      'Manually switch the Raspberry Pi between bird and bat detection.',
+                      style: TextStyle(
+                        color: Colors.black54,
+                        height: 1.25,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 14,
+              vertical: 12,
+            ),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF5F9F3),
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Text(
+              'Current mode: ${mqtt.currentMode}',
+              style: const TextStyle(
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: connected
+                      ? () => onSendCommand(
+                            context,
+                            mqtt,
+                            'bird',
+                            'Bird mode',
+                          )
+                      : null,
+                  icon: const Icon(Icons.flutter_dash_rounded),
+                  label: const Text('Bird'),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: FilledButton.icon(
+                  onPressed: connected
+                      ? () => onSendCommand(
+                            context,
+                            mqtt,
+                            'bat',
+                            'Bat mode',
+                          )
+                      : null,
+                  icon: const Icon(Icons.nightlight_round),
+                  label: const Text('Bat'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed: connected
+                  ? () => onSendCommand(
+                        context,
+                        mqtt,
+                        'stop',
+                        'Stop detection',
+                      )
+                  : null,
+              icon: const Icon(Icons.stop_rounded),
+              label: const Text('Stop detection'),
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text(
+            'These buttons publish bird / bat / stop commands to the exhibition controller on the Raspberry Pi. Detection results are still shown through the normal live MQTT detection topics.',
+            style: TextStyle(
+              color: Colors.black54,
+              fontSize: 12,
+              height: 1.35,
+            ),
           ),
         ],
       ),
