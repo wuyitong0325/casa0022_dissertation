@@ -2,245 +2,1009 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#214F3A" />
+  <meta
+    name="description"
+    content="Park Life Monitor is an interactive bird and bat detection app for urban parks, using Raspberry Pi, MQTT, Flutter, BirdNET/acoupi and BatDetect2."
+  />
   <title>Park Life Monitor</title>
+
   <style>
     :root {
-      --green: #2f6b4f;
-      --light: #f4f8f1;
-      --card: #ffffff;
-      --text: #1f2a24;
-      --muted: #5f6f67;
-      --accent: #8fd694;
-      --purple: #51407a;
+      --bg: #f3f8ef;
+      --bg-2: #e6f2e3;
+      --green-900: #183d2c;
+      --green-800: #214f3a;
+      --green-700: #2f6b4f;
+      --green-100: #e1f4df;
+      --green-50: #f4fbf2;
+      --purple-800: #43336b;
+      --purple-100: #eee8ff;
+      --amber-100: #fff2cc;
+      --text: #17251d;
+      --muted: #607267;
+      --line: rgba(33, 79, 58, 0.14);
+      --card: rgba(255, 255, 255, 0.86);
+      --shadow: 0 18px 48px rgba(24, 61, 44, 0.14);
+      --shadow-soft: 0 10px 30px rgba(24, 61, 44, 0.08);
+      --radius-xl: 32px;
+      --radius-lg: 24px;
+      --radius-md: 18px;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      scroll-behavior: smooth;
     }
 
     body {
       margin: 0;
-      font-family: Arial, Helvetica, sans-serif;
-      background: linear-gradient(180deg, #eaf5e8 0%, #f7faf5 45%, #ffffff 100%);
+      font-family:
+        Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+        "Segoe UI", Arial, Helvetica, sans-serif;
       color: var(--text);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(143, 214, 148, 0.50), transparent 34%),
+        radial-gradient(circle at 88% 8%, rgba(238, 232, 255, 0.85), transparent 32%),
+        linear-gradient(180deg, #edf7e9 0%, #f8fbf5 54%, #ffffff 100%);
       line-height: 1.6;
+      min-height: 100vh;
     }
 
-    .wrap {
-      max-width: 980px;
+    a {
+      color: inherit;
+    }
+
+    .page {
+      width: min(1080px, 100%);
       margin: 0 auto;
-      padding: 34px 18px 56px;
+      padding: 18px 16px 52px;
+    }
+
+    .nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin: 0 -16px 18px;
+      padding: 12px 16px;
+      backdrop-filter: blur(18px);
+      background: rgba(243, 248, 239, 0.78);
+      border-bottom: 1px solid rgba(33, 79, 58, 0.08);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .brand-icon {
+      width: 42px;
+      height: 42px;
+      border-radius: 15px;
+      display: grid;
+      place-items: center;
+      background: linear-gradient(135deg, var(--green-800), #75bd7a);
+      color: white;
+      box-shadow: 0 12px 28px rgba(33, 79, 58, 0.22);
+      font-size: 20px;
+      flex: 0 0 auto;
+    }
+
+    .brand-text {
+      min-width: 0;
+    }
+
+    .brand-title {
+      font-weight: 900;
+      letter-spacing: -0.02em;
+      color: var(--green-900);
+      line-height: 1.15;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .brand-subtitle {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.1;
+    }
+
+    .nav-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.7);
+      color: var(--green-800);
+      padding: 8px 11px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: 800;
+      text-decoration: none;
+      white-space: nowrap;
     }
 
     .hero {
-      background: var(--card);
-      border-radius: 28px;
-      padding: 34px;
-      box-shadow: 0 18px 45px rgba(31, 42, 36, 0.10);
-      border: 1px solid rgba(47, 107, 79, 0.12);
+      position: relative;
+      overflow: hidden;
+      display: grid;
+      grid-template-columns: 1.1fr 0.9fr;
+      gap: 24px;
+      align-items: center;
+      padding: clamp(22px, 5vw, 44px);
+      border-radius: var(--radius-xl);
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(244, 251, 242, 0.88)),
+        radial-gradient(circle at 88% 12%, rgba(143, 214, 148, 0.42), transparent 30%);
+      border: 1px solid rgba(33, 79, 58, 0.12);
+      box-shadow: var(--shadow);
+    }
+
+    .hero::before {
+      content: "";
+      position: absolute;
+      inset: auto -80px -120px auto;
+      width: 260px;
+      height: 260px;
+      border-radius: 50%;
+      background: rgba(238, 232, 255, 0.72);
+      filter: blur(4px);
+      z-index: 0;
+    }
+
+    .hero-content,
+    .phone-wrap {
+      position: relative;
+      z-index: 1;
+    }
+
+    .tag-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 16px;
     }
 
     .tag {
-      display: inline-block;
-      background: #e2f4df;
-      color: var(--green);
-      padding: 7px 12px;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 8px 12px;
       border-radius: 999px;
-      font-weight: 700;
-      font-size: 14px;
-      margin-bottom: 14px;
+      font-weight: 800;
+      font-size: 13px;
+      background: var(--green-100);
+      color: var(--green-800);
+      border: 1px solid rgba(47, 107, 79, 0.10);
+    }
+
+    .tag.purple {
+      background: var(--purple-100);
+      color: var(--purple-800);
     }
 
     h1 {
       margin: 0;
-      font-size: clamp(34px, 6vw, 58px);
-      line-height: 1.05;
-      color: var(--green);
+      font-size: clamp(42px, 8.4vw, 78px);
+      line-height: 0.96;
+      letter-spacing: -0.07em;
+      color: var(--green-900);
     }
 
-    h2 {
-      margin-top: 0;
-      color: var(--green);
-      font-size: 26px;
+    .hero-lead {
+      margin: 18px 0 0;
+      font-size: clamp(17px, 2.4vw, 21px);
+      color: #42564a;
+      max-width: 680px;
     }
 
-    p {
-      color: var(--muted);
-      font-size: 17px;
-    }
-
-    .buttons {
-      display: flex;
-      flex-wrap: wrap;
+    .hero-actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
       margin-top: 24px;
+      max-width: 620px;
     }
 
     .btn {
-      display: inline-block;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      min-height: 52px;
+      padding: 14px 16px;
+      border-radius: 18px;
       text-decoration: none;
+      font-weight: 900;
+      border: 1px solid transparent;
+      transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+      text-align: center;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn.primary {
       color: white;
-      background: var(--green);
-      padding: 13px 18px;
-      border-radius: 16px;
-      font-weight: 800;
+      background: linear-gradient(135deg, var(--green-800), #4f9d68);
+      box-shadow: 0 14px 28px rgba(33, 79, 58, 0.22);
     }
 
     .btn.secondary {
-      background: var(--purple);
+      color: white;
+      background: linear-gradient(135deg, var(--purple-800), #7d69b2);
+      box-shadow: 0 14px 28px rgba(67, 51, 107, 0.20);
     }
 
     .btn.light {
-      color: var(--green);
-      background: #e2f4df;
+      color: var(--green-800);
+      background: rgba(255, 255, 255, 0.78);
+      border-color: rgba(33, 79, 58, 0.14);
+    }
+
+    .btn:hover {
+      transform: translateY(-1px);
+      box-shadow: 0 16px 30px rgba(24, 61, 44, 0.14);
+    }
+
+    .notice {
+      margin-top: 18px;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      padding: 14px 15px;
+      border-radius: 20px;
+      color: #5d4a12;
+      background: rgba(255, 242, 204, 0.78);
+      border: 1px solid rgba(140, 105, 20, 0.12);
+      font-size: 14px;
+    }
+
+    .phone-wrap {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 480px;
+    }
+
+    .phone {
+      width: min(320px, 86vw);
+      border-radius: 42px;
+      padding: 12px;
+      background: linear-gradient(145deg, #102018, #355944);
+      box-shadow:
+        0 30px 70px rgba(24, 61, 44, 0.26),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.13);
+      transform: rotate(2deg);
+    }
+
+    .phone-screen {
+      overflow: hidden;
+      border-radius: 32px;
+      background:
+        radial-gradient(circle at 20% 0%, rgba(143, 214, 148, 0.6), transparent 36%),
+        linear-gradient(180deg, #f5fbf3, #ffffff);
+      min-height: 570px;
+      padding: 18px;
+      position: relative;
+    }
+
+    .phone-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 18px;
+      font-weight: 800;
+    }
+
+    .phone-card {
+      background: rgba(255, 255, 255, 0.88);
+      border: 1px solid rgba(33, 79, 58, 0.12);
+      border-radius: 24px;
+      padding: 16px;
+      box-shadow: var(--shadow-soft);
+      margin-bottom: 12px;
+    }
+
+    .phone-title {
+      font-size: 22px;
+      font-weight: 950;
+      letter-spacing: -0.05em;
+      color: var(--green-900);
+      margin: 0 0 5px;
+    }
+
+    .phone-muted {
+      font-size: 13px;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .detected {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: linear-gradient(135deg, var(--green-800), #5ea56b);
+      color: white;
+    }
+
+    .detected.bat {
+      background: linear-gradient(135deg, var(--purple-800), #7966aa);
+    }
+
+    .detected-icon {
+      width: 52px;
+      height: 52px;
+      display: grid;
+      place-items: center;
+      border-radius: 18px;
+      background: rgba(255, 255, 255, 0.18);
+      font-size: 28px;
+      flex: 0 0 auto;
+    }
+
+    .detected strong {
+      display: block;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+
+    .detected span {
+      display: block;
+      font-size: 12px;
+      opacity: 0.82;
+      margin-top: 3px;
+    }
+
+    .mini-bars {
+      display: grid;
+      gap: 9px;
+      margin-top: 12px;
+    }
+
+    .bar {
+      height: 10px;
+      border-radius: 999px;
+      background: #e6efe3;
+      overflow: hidden;
+    }
+
+    .bar > div {
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #60ad6b, #a4de8f);
+    }
+
+    .bar.purple > div {
+      background: linear-gradient(90deg, #63509a, #b2a0ee);
+    }
+
+    .section {
+      margin-top: 24px;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 14px;
+      margin: 0 0 14px;
+    }
+
+    h2 {
+      margin: 0;
+      color: var(--green-900);
+      font-size: clamp(25px, 4vw, 36px);
+      line-height: 1.1;
+      letter-spacing: -0.045em;
+    }
+
+    .section-title p {
+      max-width: 520px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
     }
 
     .grid {
       display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+    }
+
+    .grid.two {
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 18px;
-      margin-top: 22px;
     }
 
     .card {
+      position: relative;
+      overflow: hidden;
       background: var(--card);
-      border-radius: 24px;
+      border-radius: var(--radius-lg);
       padding: 22px;
-      box-shadow: 0 10px 30px rgba(31, 42, 36, 0.07);
-      border: 1px solid rgba(47, 107, 79, 0.10);
+      border: 1px solid var(--line);
+      box-shadow: var(--shadow-soft);
+      backdrop-filter: blur(12px);
     }
 
-    .mono {
-      background: #102018;
-      color: #dff8df;
-      padding: 14px;
-      border-radius: 14px;
-      overflow-x: auto;
-      font-family: Consolas, Monaco, monospace;
-      font-size: 14px;
+    .card-icon {
+      width: 46px;
+      height: 46px;
+      display: grid;
+      place-items: center;
+      border-radius: 16px;
+      background: var(--green-100);
+      color: var(--green-800);
+      font-size: 22px;
+      margin-bottom: 14px;
+    }
+
+    .card-icon.purple {
+      background: var(--purple-100);
+      color: var(--purple-800);
+    }
+
+    .card-icon.amber {
+      background: var(--amber-100);
+      color: #7a5a0a;
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      font-size: 19px;
+      color: var(--green-900);
+      letter-spacing: -0.02em;
+    }
+
+    .card p,
+    .card li {
+      color: var(--muted);
+      font-size: 15.5px;
+    }
+
+    .card p {
+      margin: 0;
     }
 
     ul {
-      padding-left: 20px;
+      margin: 0;
+      padding-left: 19px;
+    }
+
+    li + li {
+      margin-top: 7px;
+    }
+
+    .workflow {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .step {
+      background: rgba(255, 255, 255, 0.84);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 16px;
+      box-shadow: var(--shadow-soft);
+      min-height: 148px;
+    }
+
+    .step-num {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border-radius: 12px;
+      background: var(--green-800);
+      color: white;
+      font-weight: 950;
+      margin-bottom: 10px;
+    }
+
+    .step strong {
+      display: block;
+      color: var(--green-900);
+      margin-bottom: 5px;
+      line-height: 1.2;
+    }
+
+    .step span {
       color: var(--muted);
-      font-size: 16px;
+      font-size: 13.5px;
+      line-height: 1.35;
+      display: block;
+    }
+
+    .mono {
+      margin-top: 12px;
+      background: #102018;
+      color: #e2f7df;
+      padding: 14px;
+      border-radius: 16px;
+      overflow-x: auto;
+      font-family: Consolas, Monaco, "Courier New", monospace;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+
+    .chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+    }
+
+    .chip {
+      padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(225, 244, 223, 0.72);
+      color: var(--green-800);
+      font-size: 13px;
+      font-weight: 800;
+      border: 1px solid rgba(33, 79, 58, 0.10);
     }
 
     .footer {
-      margin-top: 28px;
-      color: #7a8880;
-      font-size: 14px;
       text-align: center;
+      color: #728078;
+      font-size: 13px;
+      padding: 28px 8px 0;
     }
 
-    @media (max-width: 760px) {
-      .hero {
-        padding: 24px;
-      }
+    .footer strong {
+      color: var(--green-800);
+    }
 
-      .grid {
+    @media (max-width: 900px) {
+      .hero {
         grid-template-columns: 1fr;
       }
 
-      .buttons {
-        flex-direction: column;
+      .phone-wrap {
+        min-height: unset;
+        padding-top: 8px;
+      }
+
+      .phone {
+        transform: none;
+      }
+
+      .grid,
+      .grid.two {
+        grid-template-columns: 1fr;
+      }
+
+      .workflow {
+        grid-template-columns: 1fr;
+      }
+
+      .section-title {
+        display: block;
+      }
+
+      .section-title p {
+        margin-top: 8px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .page {
+        padding: 12px 12px 44px;
+      }
+
+      .nav {
+        margin-left: -12px;
+        margin-right: -12px;
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+
+      .brand-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 14px;
+      }
+
+      .brand-title {
+        font-size: 14px;
+      }
+
+      .brand-subtitle {
+        display: none;
+      }
+
+      .nav-pill {
+        font-size: 11px;
+        padding: 7px 9px;
+      }
+
+      .hero {
+        border-radius: 28px;
+        padding: 22px 16px;
+      }
+
+      .tag-row {
+        gap: 6px;
+      }
+
+      .tag {
+        font-size: 12px;
+        padding: 7px 10px;
+      }
+
+      .hero-actions {
+        grid-template-columns: 1fr;
       }
 
       .btn {
-        text-align: center;
+        min-height: 56px;
+        width: 100%;
+      }
+
+      .notice {
+        font-size: 13px;
+      }
+
+      .phone {
+        width: min(300px, 100%);
+      }
+
+      .phone-screen {
+        min-height: 520px;
+        padding: 15px;
+      }
+
+      .card {
+        padding: 18px;
+        border-radius: 22px;
+      }
+
+      .step {
+        min-height: auto;
       }
     }
   </style>
 </head>
+
 <body>
-  <main class="wrap">
-    <section class="hero">
-      <div class="tag">MSc Dissertation Project · Urban Wildlife Monitoring</div>
-      <h1>Park Life Monitor</h1>
-      <p>
-        Park Life Monitor is an interactive bird and bat detection app for urban parks.
-        A Raspberry Pi listens to environmental sounds, detects birds during the day
-        and bats at night, and sends live results to a Flutter Android app using MQTT.
-        The web version is provided as an interface preview for visitors.
-      </p>
-
-      <div class="buttons">
-        <a class="btn" href="./app/">Open Web Preview</a>
-        <a class="btn secondary" href="./downloads/park_life_monitor.apk">Download Android APK</a>
-        <a class="btn light" href="https://github.com/wuyitong0325/casa0022_dissertation">View GitHub Repository</a>
-        <!-- TODO: replace this demo video link after you upload your video -->
-        <a class="btn light" href="https://github.com/wuyitong0325/casa0022_dissertation">Watch Demo Video</a>
-      </div>
-    </section>
-
-    <section class="grid">
-      <div class="card">
-        <h2>What it does</h2>
-        <ul>
-          <li>Shows live animated bird and bat detection alerts in the Android app.</li>
-          <li>Displays species information, images, and sound examples.</li>
-          <li>Records discoveries in a diary-style interface.</li>
-          <li>Summarises activity using simple charts and insights.</li>
-          <li>Supports public engagement with urban biodiversity.</li>
-        </ul>
+  <div class="page">
+    <nav class="nav" aria-label="Page navigation">
+      <div class="brand">
+        <div class="brand-icon">🌿</div>
+        <div class="brand-text">
+          <div class="brand-title">Park Life Monitor</div>
+          <div class="brand-subtitle">Bird & bat detection for urban parks</div>
+        </div>
       </div>
 
-      <div class="card">
-        <h2>Who it is for</h2>
-        <p>
-          The project is designed for park visitors, environmental educators,
-          researchers, and exhibition audiences who want to understand wildlife
-          activity that is often difficult to notice directly.
-        </p>
-      </div>
+      <a class="nav-pill" href="#setup">Setup notes</a>
+    </nav>
 
-      <div class="card">
-        <h2>Technical stack</h2>
-        <ul>
-          <li>Raspberry Pi for edge sensing and audio capture.</li>
-          <li>Flutter and Dart for the mobile/web app.</li>
-          <li>MQTT for live communication between the Raspberry Pi and Android app.</li>
-          <li>BirdNET/acoupi-related tools for bird sound analysis.</li>
-          <li>BatDetect2 for bat sound analysis.</li>
-          <li>xeno-canto, Biodiversity Ireland, GBIF, iNaturalist, and Wikipedia are used for reference data where appropriate.</li>
-        </ul>
-      </div>
-
-      <div class="card">
-        <h2>Setup notes</h2>
-        <p>
-          The web version is provided as an interface preview in the browser.
-          Because browsers cannot connect directly to a standard MQTT TCP port,
-          live MQTT detections are intended for the Android APK or a local Flutter
-          run configuration. The Android APK provided here is configured for the
-          exhibition demo. Users who run the source code themselves should configure
-          their own xeno-canto API key for online bird sound playback and their own
-          MQTT broker credentials for live detection data.
-        </p>
-
-        <div class="mono">
-flutter run -d chrome --dart-define=XENO_CANTO_API_KEY=your_key_here
+    <header class="hero">
+      <div class="hero-content">
+        <div class="tag-row">
+          <span class="tag">🎓 MSc Dissertation</span>
+          <span class="tag purple">🦇 Birds + Bats</span>
+          <span class="tag">📍 Urban Parks</span>
         </div>
 
-        <p>
-          The exhibition MQTT setup is used only for demonstration data. It should
-          not be used for sensitive or long-term deployments.
+        <h1>Discover hidden wildlife through sound.</h1>
+
+        <p class="hero-lead">
+          Park Life Monitor is an interactive bird and bat detection app for urban parks.
+          A Raspberry Pi listens to environmental sounds, detects birds during the day
+          and bats at night, and sends live results to a Flutter Android app using MQTT.
+          The web version is provided as an interface preview for visitors.
         </p>
+
+        <div class="hero-actions" aria-label="Project links">
+          <a class="btn primary" href="./app/">Open Web Preview</a>
+          <a class="btn secondary" href="./downloads/park_life_monitor.apk">Download Android APK</a>
+          <a class="btn light" href="https://github.com/wuyitong0325/casa0022_dissertation">View GitHub</a>
+          <a class="btn light" href="https://github.com/wuyitong0325/casa0022_dissertation">Watch Demo Video</a>
+        </div>
+
+        <div class="notice">
+          <span>ℹ️</span>
+          <span>
+            The public web preview and APK are for exploring the interface.
+            The exhibition device uses a configured local build for the live MQTT demonstration.
+          </span>
+        </div>
+      </div>
+
+      <div class="phone-wrap" aria-label="App interface preview">
+        <div class="phone">
+          <div class="phone-screen">
+            <div class="phone-top">
+              <span>Park Life Monitor</span>
+              <span>MQTT ●</span>
+            </div>
+
+            <div class="phone-card">
+              <p class="phone-title">Live Habitat</p>
+              <p class="phone-muted">
+                Real-time bird and bat activity from the Raspberry Pi.
+              </p>
+            </div>
+
+            <div class="phone-card detected">
+              <div class="detected-icon">🐦</div>
+              <div>
+                <strong>Bird detected</strong>
+                <span>Common Blackbird · Turdus merula</span>
+              </div>
+            </div>
+
+            <div class="phone-card detected bat">
+              <div class="detected-icon">🦇</div>
+              <div>
+                <strong>Bat detected</strong>
+                <span>Common Pipistrelle · Pipistrellus pipistrellus</span>
+              </div>
+            </div>
+
+            <div class="phone-card">
+              <p class="phone-title">Discoveries</p>
+              <p class="phone-muted">Species counts, detection timeline and confidence overview.</p>
+              <div class="mini-bars">
+                <div class="bar"><div style="width: 78%"></div></div>
+                <div class="bar purple"><div style="width: 54%"></div></div>
+                <div class="bar"><div style="width: 66%"></div></div>
+              </div>
+            </div>
+
+            <div class="phone-card">
+              <p class="phone-title">Exhibition Control</p>
+              <p class="phone-muted">Manual Bird / Bat / Stop controls for live demonstration.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <section class="section">
+      <div class="section-title">
+        <h2>What problem does it address?</h2>
+        <p>
+          Wildlife activity in cities is often present but invisible to the public.
+          This project turns acoustic monitoring into a more understandable and engaging experience.
+        </p>
+      </div>
+
+      <div class="grid">
+        <article class="card">
+          <div class="card-icon">👥</div>
+          <h3>For public engagement</h3>
+          <p>
+            Visitors can see immediate visual feedback when birds or bats are detected,
+            making urban biodiversity easier to notice and discuss.
+          </p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon purple">📡</div>
+          <h3>For environmental sensing</h3>
+          <p>
+            The system demonstrates how low-cost edge devices can collect acoustic signals
+            and send meaningful results to an interactive app.
+          </p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon amber">📊</div>
+          <h3>For education and explanation</h3>
+          <p>
+            Species cards, sound examples, diary entries and charts help translate
+            technical monitoring data into a visitor-friendly format.
+          </p>
+        </article>
       </div>
     </section>
 
-    <section class="card" style="margin-top:18px;">
-      <h2>Attribution</h2>
-      <p>
-        This project was developed as part of an MSc dissertation with guidance
-        from Duncan Wilson. Bird reference sounds are sourced from xeno-canto where
-        available. Bat reference sounds use sources such as Biodiversity Ireland
-        full-spectrum bat recordings, with additional lookup support from GBIF,
-        iNaturalist and xeno-canto where available. Species summaries and images
-        are retrieved from Wikipedia species pages where appropriate.
-      </p>
+    <section class="section">
+      <div class="section-title">
+        <h2>How it works</h2>
+        <p>
+          The exhibition version allows manual switching between bird and bat detection,
+          so the demonstration is not limited by time-of-day rules.
+        </p>
+      </div>
+
+      <div class="workflow" aria-label="System workflow">
+        <div class="step">
+          <div class="step-num">1</div>
+          <strong>Listen</strong>
+          <span>Raspberry Pi records environmental audio from the park or exhibition setup.</span>
+        </div>
+
+        <div class="step">
+          <div class="step-num">2</div>
+          <strong>Analyse</strong>
+          <span>BirdNET/acoupi-related tools and BatDetect2 support bird and bat sound analysis.</span>
+        </div>
+
+        <div class="step">
+          <div class="step-num">3</div>
+          <strong>Publish</strong>
+          <span>Detection results are sent to the app using MQTT topics.</span>
+        </div>
+
+        <div class="step">
+          <div class="step-num">4</div>
+          <strong>React</strong>
+          <span>The app shows animated alerts, species information and discovery records.</span>
+        </div>
+
+        <div class="step">
+          <div class="step-num">5</div>
+          <strong>Explore</strong>
+          <span>Visitors can view charts, sound examples, an atlas and discovery history.</span>
+        </div>
+      </div>
     </section>
 
-    <div class="footer">
-      Park Life Monitor · Queen Elizabeth Olympic Park · MSc Dissertation Project
-    </div>
-  </main>
+    <section class="section">
+      <div class="section-title">
+        <h2>Project features</h2>
+        <p>
+          The app is designed as an interactive public-facing experience, not only a technical dashboard.
+        </p>
+      </div>
+
+      <div class="grid two">
+        <article class="card">
+          <div class="card-icon">✨</div>
+          <h3>Interactive app experience</h3>
+          <ul>
+            <li>Live bird and bat detection alerts in the Android app.</li>
+            <li>Animated full-screen detection moments for exhibition impact.</li>
+            <li>Species cards with images, descriptions and sound examples.</li>
+            <li>Nature diary for recent discoveries.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="card-icon purple">🛠️</div>
+          <h3>Exhibition control mode</h3>
+          <ul>
+            <li>Manual Bird / Bat / Stop buttons inside the app.</li>
+            <li>Commands are sent to the Raspberry Pi through MQTT.</li>
+            <li>The demo is not restricted by the 8pm automatic bat mode.</li>
+            <li>Designed for clear live demonstration during the degree show.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <h2>Technology stack</h2>
+        <p>
+          The project combines embedded sensing, acoustic AI tools and mobile app design.
+        </p>
+      </div>
+
+      <div class="grid">
+        <article class="card">
+          <div class="card-icon">🥧</div>
+          <h3>Edge sensing</h3>
+          <ul>
+            <li>Raspberry Pi for audio capture and local control.</li>
+            <li>Python scripts for bird, bat and exhibition monitoring.</li>
+            <li>Manual exhibition controller for switching detection mode.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="card-icon purple">📱</div>
+          <h3>App and communication</h3>
+          <ul>
+            <li>Flutter and Dart for Android and web interface.</li>
+            <li>MQTT for live communication between the Raspberry Pi and Android app.</li>
+            <li>Web preview for quick browser-based interface viewing.</li>
+          </ul>
+        </article>
+
+        <article class="card">
+          <div class="card-icon amber">🔊</div>
+          <h3>Wildlife audio and data</h3>
+          <ul>
+            <li>BirdNET/acoupi-related tools for bird sound analysis.</li>
+            <li>BatDetect2 for bat sound analysis.</li>
+            <li>xeno-canto, Biodiversity Ireland, GBIF, iNaturalist and Wikipedia are used where appropriate.</li>
+          </ul>
+        </article>
+      </div>
+    </section>
+
+    <section class="section" id="setup">
+      <div class="section-title">
+        <h2>Setup notes</h2>
+        <p>
+          These notes are for visitors or developers who want to try the app or inspect the source code.
+        </p>
+      </div>
+
+      <div class="grid two">
+        <article class="card">
+          <div class="card-icon">🌐</div>
+          <h3>Web preview and APK</h3>
+          <p>
+            The web version is provided as an interface preview in the browser.
+            Because browsers cannot connect directly to a standard MQTT TCP port,
+            live MQTT detections are intended for the Android app or a local Flutter run configuration.
+            The public APK is for app preview. The exhibition device uses a configured local build for live MQTT demonstration.
+          </p>
+        </article>
+
+        <article class="card">
+          <div class="card-icon purple">🔑</div>
+          <h3>Developer configuration</h3>
+          <p>
+            Users who run the source code themselves should configure their own
+            xeno-canto API key for online bird sound playback and their own MQTT
+            broker credentials for live detection data.
+          </p>
+
+          <div class="mono">flutter run -d chrome --dart-define=XENO_CANTO_API_KEY=your_key_here</div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-title">
+        <h2>Attribution</h2>
+        <p>
+          Key libraries, services and data sources used in the project.
+        </p>
+      </div>
+
+      <article class="card">
+        <p>
+          This project was developed as part of an MSc dissertation with guidance from
+          Duncan Wilson. The system uses Raspberry Pi, Flutter, Dart and MQTT for sensing,
+          communication and app development. Bird sound analysis is based on
+          BirdNET/acoupi-related tools, while bat detection uses BatDetect2.
+          Wildlife reference sounds are sourced from xeno-canto for bird recordings and
+          Biodiversity Ireland full-spectrum bat recordings where appropriate, with
+          additional lookup support from GBIF, iNaturalist and xeno-canto where available.
+          Species summaries and images are retrieved from Wikipedia species pages where appropriate.
+        </p>
+
+        <div class="chips">
+          <span class="chip">Urban biodiversity</span>
+          <span class="chip">Wildlife monitoring</span>
+          <span class="chip">Bird detection</span>
+          <span class="chip">Bat detection</span>
+          <span class="chip">Bioacoustics</span>
+          <span class="chip">Raspberry Pi</span>
+          <span class="chip">Flutter</span>
+          <span class="chip">MQTT</span>
+          <span class="chip">Environmental education</span>
+        </div>
+      </article>
+    </section>
+
+    <footer class="footer">
+      <strong>Park Life Monitor</strong> · Queen Elizabeth Olympic Park · MSc Dissertation Project
+    </footer>
+  </div>
 </body>
 </html>
