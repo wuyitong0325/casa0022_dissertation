@@ -497,15 +497,17 @@
       max-width: 520px;
       margin: 0 auto;
       width: 100%;
+      padding: 14px;
     }
 
     .demo-video-player {
       display: block;
       width: 100%;
       height: auto;
-      max-height: 78vh;
+      max-height: 72vh;
       object-fit: contain;
       background: #000;
+      border-radius: 12px;
     }
 
     .workflow {
@@ -650,6 +652,7 @@
 
       .video-player-wrap {
         border-radius: 22px;
+        padding: 16px;
       }
     }
 
@@ -693,6 +696,16 @@
 
       .step span {
         font-size: 13px;
+      }
+    }
+
+    @media (max-width: 640px) {
+      .video-player-wrap {
+        padding: 18px;
+      }
+
+      .demo-video-player {
+        max-height: 68vh;
       }
     }
 
