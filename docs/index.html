@@ -491,17 +491,21 @@
     .video-player-wrap {
       overflow: hidden;
       border-radius: 20px;
-      background: rgba(255, 255, 255, 0.92);
+      background: #000;
       border: 1px solid rgba(255, 255, 255, 0.55);
       box-shadow: inset 0 0 0 1px rgba(18, 60, 43, 0.08);
+      max-width: 520px;
+      margin: 0 auto;
+      width: 100%;
     }
 
     .demo-video-player {
       display: block;
       width: 100%;
-      aspect-ratio: 16 / 9;
-      object-fit: cover;
-      background: #0f2017;
+      height: auto;
+      max-height: 78vh;
+      object-fit: contain;
+      background: #000;
     }
 
     .workflow {
@@ -639,7 +643,7 @@
       }
 
       .demo-video-card {
-        grid-template-columns: 0.82fr 1.18fr;
+        grid-template-columns: 1fr 0.72fr;
         align-items: center;
         padding: 22px;
       }
@@ -776,7 +780,7 @@
           <div class="quick-actions">
             <a class="btn primary" href="./app/">Open Web Preview</a>
             <a class="btn secondary" href="./downloads/park_life_monitor.apk">Download APK</a>
-            <a class="btn light" href="https://github.com/wuyitong0325/casa0022_dissertation">View GitHub</a>
+            <a class="btn light" href="#setup">Project Info</a>
           </div>
 
           <div class="notice">
