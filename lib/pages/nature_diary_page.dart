@@ -15,6 +15,9 @@ class NatureDiaryPage extends StatelessWidget {
     final history = context.watch<DetectionHistoryService>();
     final events = history.events;
 
+    final width = MediaQuery.of(context).size.width;
+    final compact = width < 380;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Nature Diary'),
@@ -38,19 +41,31 @@ class NatureDiaryPage extends StatelessWidget {
               ),
             )
           : ListView(
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.fromLTRB(
+                compact ? 10 : 16,
+                compact ? 10 : 16,
+                compact ? 10 : 16,
+                24,
+              ),
               children: [
-                const Text(
+                Text(
                   'Field Notes Timeline',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 28,
+                    fontSize: compact ? 25 : 28,
                     fontWeight: FontWeight.w900,
+                    height: 1.08,
                   ),
                 ),
                 const SizedBox(height: 6),
-                const Text(
+                Text(
                   'Diary records the latest 30 detection events in time order. These notes are saved locally on this phone.',
-                  style: TextStyle(color: Colors.black54),
+                  style: TextStyle(
+                    color: Colors.black54,
+                    fontSize: compact ? 14 : 15,
+                    height: 1.35,
+                  ),
                 ),
                 const SizedBox(height: 18),
                 for (int i = 0; i < events.length; i++)
@@ -76,6 +91,24 @@ class _TimelineEntry extends StatelessWidget {
     required this.isLast,
   });
 
+  void _openDetails(
+    BuildContext context,
+    DetectionEvent event,
+    dynamic profile,
+    bool isLoading,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (_) => SpeciesInfoSheet(
+        event: event,
+        profile: profile,
+        isLoading: isLoading,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final mqtt = context.watch<MqttService>();
@@ -83,12 +116,15 @@ class _TimelineEntry extends StatelessWidget {
     final profile = mqtt.profileForEvent(event);
     final isLoading = mqtt.isProfileLoading(event);
 
+    final width = MediaQuery.of(context).size.width;
+    final compact = width < 380;
+
     return IntrinsicHeight(
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           SizedBox(
-            width: 42,
+            width: compact ? 30 : 42,
             child: Column(
               children: [
                 Expanded(
@@ -98,8 +134,8 @@ class _TimelineEntry extends StatelessWidget {
                   ),
                 ),
                 Container(
-                  width: 34,
-                  height: 34,
+                  width: compact ? 28 : 34,
+                  height: compact ? 28 : 34,
                   decoration: BoxDecoration(
                     color: event.isBat
                         ? const Color(0xFFE8DDFF)
@@ -109,7 +145,7 @@ class _TimelineEntry extends StatelessWidget {
                   child: Center(
                     child: Text(
                       event.emoji,
-                      style: const TextStyle(fontSize: 20),
+                      style: TextStyle(fontSize: compact ? 17 : 20),
                     ),
                   ),
                 ),
@@ -122,11 +158,11 @@ class _TimelineEntry extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(width: 10),
+          SizedBox(width: compact ? 6 : 10),
           Expanded(
             child: Container(
               margin: const EdgeInsets.only(bottom: 14),
-              padding: const EdgeInsets.all(16),
+              padding: EdgeInsets.all(compact ? 13 : 16),
               decoration: BoxDecoration(
                 color: Colors.white,
                 borderRadius: BorderRadius.circular(24),
@@ -140,26 +176,23 @@ class _TimelineEntry extends StatelessWidget {
               ),
               child: InkWell(
                 borderRadius: BorderRadius.circular(20),
-                onTap: () {
-                  showModalBottomSheet(
-                    context: context,
-                    showDragHandle: true,
-                    isScrollControlled: true,
-                    builder: (_) => SpeciesInfoSheet(
-                      event: event,
-                      profile: profile,
-                      isLoading: isLoading,
-                    ),
-                  );
-                },
+                onTap: () => _openDetails(
+                  context,
+                  event,
+                  profile,
+                  isLoading,
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
                       _timeText(event.timestamp),
-                      style: const TextStyle(
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
                         color: Colors.black45,
                         fontWeight: FontWeight.w700,
+                        fontSize: compact ? 13 : 14,
                       ),
                     ),
                     const SizedBox(height: 6),
@@ -167,64 +200,119 @@ class _TimelineEntry extends StatelessWidget {
                       event.isBat
                           ? 'Night bat activity'
                           : 'Daytime bird activity',
-                      style: const TextStyle(
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
                         fontWeight: FontWeight.w900,
-                        fontSize: 17,
+                        fontSize: compact ? 16 : 17,
                       ),
                     ),
                     const SizedBox(height: 5),
                     Text(
                       event.commonName,
-                      style: const TextStyle(
-                        fontSize: 20,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      softWrap: true,
+                      style: TextStyle(
+                        fontSize: compact ? 19 : 20,
                         fontWeight: FontWeight.w900,
+                        height: 1.1,
                       ),
                     ),
                     Text(
                       event.scientificName,
-                      style: const TextStyle(
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
                         color: Colors.black54,
                         fontStyle: FontStyle.italic,
+                        fontSize: compact ? 14 : 15,
                       ),
                     ),
                     const SizedBox(height: 10),
-                    ConfidenceChip(event: event),
+                    SizedBox(
+                      width: double.infinity,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: FittedBox(
+                          fit: BoxFit.scaleDown,
+                          alignment: Alignment.centerLeft,
+                          child: ConfidenceChip(event: event),
+                        ),
+                      ),
+                    ),
                     const SizedBox(height: 12),
                     Row(
                       children: [
                         Expanded(
-                          child: OutlinedButton.icon(
-                            onPressed: () {
-                              mqtt.replayDetection(event);
-                              ScaffoldMessenger.of(context).showSnackBar(
-                                const SnackBar(
-                                  content: Text(
-                                    'Animation replayed on the Live page.',
+                          child: SizedBox(
+                            height: compact ? 38 : 40,
+                            child: OutlinedButton(
+                              onPressed: () {
+                                mqtt.replayDetection(event);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      'Animation replayed on the Live page.',
+                                    ),
                                   ),
+                                );
+                              },
+                              style: OutlinedButton.styleFrom(
+                                padding: EdgeInsets.zero,
+                                minimumSize: Size.zero,
+                                tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(999),
                                 ),
-                              );
-                            },
-                            icon: const Icon(Icons.replay_rounded),
-                            label: const Text('Replay'),
+                              ),
+                              child: Text(
+                                'Replay',
+                                maxLines: 1,
+                                softWrap: false,
+                                overflow: TextOverflow.visible,
+                                style: TextStyle(
+                                  fontSize: compact ? 12.5 : 13.5,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 10),
+                        const SizedBox(width: 8),
                         Expanded(
-                          child: FilledButton.icon(
-                            onPressed: () {
-                              showModalBottomSheet(
-                                context: context,
-                                showDragHandle: true,
-                                isScrollControlled: true,
-                                builder: (_) => SpeciesInfoSheet(
-                                  event: event,
-                                  profile: profile,
-                                  isLoading: isLoading,
+                          child: SizedBox(
+                            height: compact ? 38 : 40,
+                            child: FilledButton(
+                              onPressed: () => _openDetails(
+                                context,
+                                event,
+                                profile,
+                                isLoading,
+                              ),
+                              style: FilledButton.styleFrom(
+                                padding: EdgeInsets.zero,
+                                minimumSize: Size.zero,
+                                tapTargetSize:
+                                    MaterialTapTargetSize.shrinkWrap,
+                                visualDensity: VisualDensity.compact,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(999),
                                 ),
-                              );
-                            },
-                            icon: const Icon(Icons.info_outline_rounded),
-                            label: const Text('Details'),
+                              ),
+                              child: Text(
+                                'Details',
+                                maxLines: 1,
+                                softWrap: false,
+                                overflow: TextOverflow.visible,
+                                style: TextStyle(
+                                  fontSize: compact ? 12.5 : 13.5,
+                                  fontWeight: FontWeight.w900,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ],
