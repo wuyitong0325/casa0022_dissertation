@@ -2,7 +2,6 @@ import argparse
 import csv
 import json
 import os
-import re
 import shutil
 import subprocess
 import time
@@ -22,39 +21,35 @@ from mqtt_config import (
     BAT_STATUS_TOPIC,
 )
 
-# =========================
-# Basic settings
-# =========================
-
 DEVICE_ID = "wuyitong-pi"
 
 AUDIO_DIR = Path("/home/wuyitong0325/bat_audio")
 BAT_OUTPUT_DIR = Path("/home/wuyitong0325/bat_outputs")
-
 AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 BAT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 BATDETECT2_BIN = "/home/wuyitong0325/batdetect-env/bin/batdetect2"
 
-# UltraMic / ultrasonic bat audio settings
 SAMPLE_RATE = 192000
 CHANNELS = 1
 RECORD_SECONDS = 10
-
-# 根据你的设备情况，原来用的可能是 hw:2,0
-# 如果录音失败，可以改成 None 或其他设备号。
 ALSA_DEVICE = "hw:2,0"
 
-# batdetect2 的 threshold 不能照搬 bird 的 0.5。
-# 之前教授 wav 测试中 0.03 可以检测到 52 calls。
-DETECTION_THRESHOLD = 0.03
+# Low threshold for BatDetect2 candidate generation.
+DETECTION_THRESHOLD = 0.20
 
-# batdetect2 最大运行时间，防止卡死。
+# Higher threshold for publishing a detection to the app.
+PUBLISH_CONFIDENCE = 0.50
+WEAK_CONFIDENCE = 0.20
+
+# Extra filters to reduce false positives from laptop noise, speech, and electrical noise.
+MIN_CALL_COUNT = 2
+MIN_HIGH_FREQ = 30000
+MIN_CALL_DURATION = 0.005
+MAX_CALL_DURATION = 0.30
+
 BATDETECT_TIMEOUT_SECONDS = 180
-
-# 每轮之间休息时间
-LOOP_SLEEP_SECONDS = 2
-
+LOOP_SLEEP_SECONDS = 0
 
 BAT_COMMON_NAMES = {
     "Pipistrellus pipistrellus": "Common Pipistrelle",
@@ -70,10 +65,6 @@ BAT_COMMON_NAMES = {
     "Rhinolophus hipposideros": "Lesser Horseshoe Bat",
 }
 
-
-# =========================
-# MQTT setup
-# =========================
 
 client = mqtt.Client()
 client.username_pw_set(MQTT_USERNAME, MQTT_PASSWORD)
@@ -97,33 +88,35 @@ def publish_status(status, extra=None):
         payload.update(extra)
 
     print("STATUS:", payload, flush=True)
-
-    client.publish(
-        BAT_STATUS_TOPIC,
-        json.dumps(payload),
-        retain=True,
-    )
+    client.publish(BAT_STATUS_TOPIC, json.dumps(payload), retain=True)
 
 
 def publish_detection(payload):
     print("DETECTION:", payload, flush=True)
-
-    client.publish(
-        BAT_DETECTION_TOPIC,
-        json.dumps(payload),
-        retain=False,
-    )
+    client.publish(BAT_DETECTION_TOPIC, json.dumps(payload), retain=False)
 
 
-# =========================
-# Audio recording
-# =========================
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def safe_int(value, default=0):
+    try:
+        return int(float(value))
+    except Exception:
+        return default
+
 
 def record_ultrasonic_audio(record_seconds=RECORD_SECONDS):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     wav_path = AUDIO_DIR / f"bat_{timestamp}.wav"
 
-    print(f"Recording ultrasonic audio: {wav_path}", flush=True)
+    print("=" * 80, flush=True)
+    print(f"RECORDING {record_seconds}s ultrasonic audio...", flush=True)
+    print(f"File: {wav_path}", flush=True)
 
     publish_status(
         "recording",
@@ -136,27 +129,18 @@ def record_ultrasonic_audio(record_seconds=RECORD_SECONDS):
 
     frames = int(record_seconds * SAMPLE_RATE)
 
-    if ALSA_DEVICE:
-        audio = sd.rec(
-            frames,
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-            device=ALSA_DEVICE,
-        )
-    else:
-        audio = sd.rec(
-            frames,
-            samplerate=SAMPLE_RATE,
-            channels=CHANNELS,
-            dtype="int16",
-        )
+    audio = sd.rec(
+        frames,
+        samplerate=SAMPLE_RATE,
+        channels=CHANNELS,
+        dtype="int16",
+        device=ALSA_DEVICE if ALSA_DEVICE else None,
+    )
 
     sd.wait()
-
     write(str(wav_path), SAMPLE_RATE, audio)
 
-    print(f"Saved wav: {wav_path}", flush=True)
+    print(f"RECORDED: {wav_path}", flush=True)
 
     publish_status(
         "recorded",
@@ -170,21 +154,7 @@ def record_ultrasonic_audio(record_seconds=RECORD_SECONDS):
     return wav_path
 
 
-# =========================
-# Safe BatDetect2 runner
-# =========================
-
 def run_batdetect2(wav_path, threshold=DETECTION_THRESHOLD):
-    """
-    Run BatDetect2 safely on exactly one wav file.
-
-    It creates a temporary input directory, copies one wav into it,
-    and runs:
-        timeout 180s nice -n 15 batdetect2 detect input_dir output_dir threshold
-
-    Thread-related environment variables are limited to avoid killing the Pi.
-    """
-
     wav_path = Path(wav_path)
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -218,7 +188,7 @@ def run_batdetect2(wav_path, threshold=DETECTION_THRESHOLD):
     env["NUMBA_NUM_THREADS"] = "1"
     env["NUMBA_CACHE_DIR"] = "/tmp/numba_cache_batdetect"
 
-    print("Running BatDetect2 safely...", flush=True)
+    print("ANALYSING with BatDetect2...", flush=True)
     print("CMD:", " ".join(cmd), flush=True)
 
     publish_status(
@@ -263,114 +233,20 @@ def run_batdetect2(wav_path, threshold=DETECTION_THRESHOLD):
         print("BatDetect2 stderr:", flush=True)
         print(stderr, flush=True)
 
-    if result.returncode == 124:
-        publish_status(
-            "batdetect_timeout",
-            {
-                "audio_file": str(wav_path),
-                "output_dir": str(output_dir),
-                "timeout_seconds": BATDETECT_TIMEOUT_SECONDS,
-            },
-        )
-    elif result.returncode != 0:
-        publish_status(
-            "batdetect_error",
-            {
-                "audio_file": str(wav_path),
-                "output_dir": str(output_dir),
-                "return_code": result.returncode,
-                "stderr": stderr[-500:],
-            },
-        )
-
     return output_dir, stdout, stderr, result.returncode
 
 
-# =========================
-# BatDetect2 output parsing
-# =========================
-
-def safe_float(value, default=0.0):
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def safe_int(value, default=0):
-    try:
-        return int(float(value))
-    except Exception:
-        return default
-
-
-def normalise_detection(raw, wav_path):
-    if not isinstance(raw, dict):
-        return None
-
-    species = (
-        raw.get("class")
-        or raw.get("species")
-        or raw.get("species_name")
-        or raw.get("class_name")
-        or raw.get("scientific_name")
-        or "Bat"
-    )
-
-    species = str(species).strip()
-    common_name = BAT_COMMON_NAMES.get(species, species if species else "Bat")
-
-    confidence = safe_float(
-        raw.get("det_prob",
-                raw.get("confidence",
-                        raw.get("score",
-                                raw.get("probability_present",
-                                        raw.get("class_prob", 0.0))))),
-        0.0,
-    )
-
-    class_probability = safe_float(raw.get("class_prob", raw.get("probability_present", 0.0)), 0.0)
-
-    start_time = safe_float(raw.get("start_time", raw.get("start", 0.0)), 0.0)
-    end_time = safe_float(raw.get("end_time", raw.get("end", 0.0)), 0.0)
-
-    low_freq = safe_int(raw.get("low_freq", raw.get("low_freq_hz", 0)), 0)
-    high_freq = safe_int(raw.get("high_freq", raw.get("high_freq_hz", 0)), 0)
-
-    event = str(raw.get("event", "Echolocation"))
-
-    return {
-        "device_id": DEVICE_ID,
-        "type": "bat",
-        "status": "bat_detected",
-        "common_name": common_name,
-        "scientific_name": species,
-        "confidence": confidence,
-        "class_probability": class_probability,
-        "event": event,
-        "start_time": start_time,
-        "end_time": end_time,
-        "low_freq": low_freq,
-        "high_freq": high_freq,
-        "audio_file": str(wav_path),
-        "timestamp": now_iso(),
-        "source": "batdetect2",
-    }
-
-
 def find_detection_dicts(obj):
-    """
-    Recursively find detection-like dictionaries from BatDetect2 JSON outputs.
-    """
-
     detections = []
 
     if isinstance(obj, dict):
         if (
             "det_prob" in obj
             or "start_time" in obj
+            or "end_time" in obj
             or "event" in obj
-            or "probability_present" in obj
+            or "class" in obj
+            or "species_name" in obj
         ):
             detections.append(obj)
 
@@ -385,17 +261,13 @@ def find_detection_dicts(obj):
 
 
 def parse_json_file(path):
-    detections = []
-
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
-
-        detections.extend(find_detection_dicts(data))
+        return find_detection_dicts(data)
     except Exception as e:
         print(f"Could not parse JSON file {path}: {e}", flush=True)
-
-    return detections
+        return []
 
 
 def parse_csv_file(path):
@@ -418,6 +290,7 @@ def parse_csv_file(path):
                 if (
                     "det_prob" in normalised
                     or "start_time" in normalised
+                    or "end_time" in normalised
                     or "event" in normalised
                     or "class" in normalised
                     or "species_name" in normalised
@@ -430,56 +303,63 @@ def parse_csv_file(path):
     return detections
 
 
-def parse_stdout_summary(stdout):
-    """
-    Parse BatDetect2 stdout summary like:
+def normalise_detection(raw, wav_path):
+    if not isinstance(raw, dict):
+        return None
 
-    species_name                probability_present
-    Pipistrellus pipistrellus   0.944
-    Pipistrellus nathusii       0.018
-    """
+    species = (
+        raw.get("class")
+        or raw.get("species")
+        or raw.get("species_name")
+        or raw.get("class_name")
+        or raw.get("scientific_name")
+        or "Bat"
+    )
 
-    detections = []
+    species = str(species).strip()
+    common_name = BAT_COMMON_NAMES.get(species, species if species else "Bat")
 
-    if not stdout:
-        return detections
+    confidence = safe_float(
+        raw.get(
+            "det_prob",
+            raw.get(
+                "confidence",
+                raw.get(
+                    "score",
+                    raw.get("class_prob", 0.0),
+                ),
+            ),
+        ),
+        0.0,
+    )
 
-    lines = stdout.splitlines()
+    class_probability = safe_float(raw.get("class_prob", 0.0), 0.0)
+    start_time = safe_float(raw.get("start_time", raw.get("start", 0.0)), 0.0)
+    end_time = safe_float(raw.get("end_time", raw.get("end", 0.0)), 0.0)
+    low_freq = safe_int(raw.get("low_freq", raw.get("low_freq_hz", 0)), 0)
+    high_freq = safe_int(raw.get("high_freq", raw.get("high_freq_hz", 0)), 0)
 
-    found_header = False
-
-    for line in lines:
-        stripped = line.strip()
-
-        if not stripped:
-            continue
-
-        if "species_name" in stripped and "probability" in stripped:
-            found_header = True
-            continue
-
-        if found_header:
-            match = re.match(r"^([A-Za-z]+(?:\s+[a-zA-Z]+)+)\s+([0-9]*\.?[0-9]+)$", stripped)
-
-            if match:
-                species = match.group(1).strip()
-                prob = safe_float(match.group(2), 0.0)
-
-                detections.append(
-                    {
-                        "class": species,
-                        "species_name": species,
-                        "probability_present": prob,
-                        "event": "Echolocation",
-                    }
-                )
-
-    return detections
+    return {
+        "device_id": DEVICE_ID,
+        "type": "bat",
+        "status": "bat_detected",
+        "common_name": common_name,
+        "scientific_name": species,
+        "confidence": confidence,
+        "class_probability": class_probability,
+        "event": str(raw.get("event", "Echolocation")),
+        "start_time": start_time,
+        "end_time": end_time,
+        "low_freq": low_freq,
+        "high_freq": high_freq,
+        "audio_file": str(wav_path),
+        "timestamp": now_iso(),
+        "source": "batdetect2",
+    }
 
 
-def parse_batdetect2_outputs(output_dir, wav_path, stdout=""):
+def parse_batdetect2_outputs(output_dir, wav_path):
     raw_detections = []
-
     output_dir = Path(output_dir)
 
     if output_dir.exists():
@@ -494,18 +374,37 @@ def parse_batdetect2_outputs(output_dir, wav_path, stdout=""):
             elif suffix == ".csv":
                 raw_detections.extend(parse_csv_file(path))
 
-    if not raw_detections:
-        raw_detections.extend(parse_stdout_summary(stdout))
-
     detections = []
 
     for raw in raw_detections:
         detection = normalise_detection(raw, wav_path)
-
         if detection:
             detections.append(detection)
 
     return detections
+
+
+def is_possible_real_call(detection):
+    confidence = safe_float(detection.get("confidence", 0.0), 0.0)
+    start_time = safe_float(detection.get("start_time", 0.0), 0.0)
+    end_time = safe_float(detection.get("end_time", 0.0), 0.0)
+    high_freq = safe_int(detection.get("high_freq", 0), 0)
+
+    duration = end_time - start_time
+
+    if confidence < WEAK_CONFIDENCE:
+        return False
+
+    if end_time <= start_time:
+        return False
+
+    if duration < MIN_CALL_DURATION or duration > MAX_CALL_DURATION:
+        return False
+
+    if high_freq < MIN_HIGH_FREQ:
+        return False
+
+    return True
 
 
 def choose_best_detection(detections):
@@ -514,68 +413,107 @@ def choose_best_detection(detections):
 
     return max(
         detections,
-        key=lambda d: safe_float(
-            d.get("confidence", d.get("class_probability", 0.0)),
-            0.0,
-        ),
+        key=lambda d: safe_float(d.get("confidence", 0.0), 0.0),
     )
 
-
-# =========================
-# Full processing
-# =========================
 
 def process_wav(wav_path, threshold=DETECTION_THRESHOLD, publish=True):
     wav_path = Path(wav_path)
 
     print("=" * 80, flush=True)
-    print(f"Processing bat wav: {wav_path}", flush=True)
+    print(f"PROCESSING: {wav_path}", flush=True)
 
     output_dir, stdout, stderr, return_code = run_batdetect2(wav_path, threshold)
 
-    if return_code not in (0,):
-        print(f"BatDetect2 did not finish normally. return_code={return_code}", flush=True)
+    if return_code != 0:
+        print(f"BatDetect2 failed: return_code={return_code}", flush=True)
+
+        publish_status(
+            "batdetect_error",
+            {
+                "audio_file": str(wav_path),
+                "return_code": return_code,
+                "output_dir": str(output_dir),
+                "stderr": stderr[-500:],
+            },
+        )
+
         return None
 
-    detections = parse_batdetect2_outputs(output_dir, wav_path, stdout)
+    detections = parse_batdetect2_outputs(output_dir, wav_path)
 
     print(f"Parsed detection count: {len(detections)}", flush=True)
 
-    strong = [
-        d for d in detections
-        if safe_float(d.get("confidence", 0.0), 0.0) >= threshold
-        or safe_float(d.get("class_probability", 0.0), 0.0) >= threshold
-    ]
+    possible_calls = []
 
-    print(f"Strong detection count: {len(strong)}", flush=True)
+    for d in detections:
+        confidence = safe_float(d.get("confidence", 0.0), 0.0)
+        start_time = safe_float(d.get("start_time", 0.0), 0.0)
+        end_time = safe_float(d.get("end_time", 0.0), 0.0)
+        duration = end_time - start_time
+        high_freq = safe_int(d.get("high_freq", 0), 0)
 
-    if not strong:
+        print(
+            f"Candidate: {d.get('common_name')} / {d.get('scientific_name')} "
+            f"conf={confidence:.2f} "
+            f"time={start_time:.3f}-{end_time:.3f}s "
+            f"duration={duration:.3f}s "
+            f"high_freq={high_freq}",
+            flush=True,
+        )
+
+        if is_possible_real_call(d):
+            possible_calls.append(d)
+        else:
+            print("Rejected candidate after bat-call filters.", flush=True)
+
+    print(f"Possible real call count: {len(possible_calls)}", flush=True)
+
+    if not possible_calls:
         publish_status(
             "no_bats_detected",
             {
                 "audio_file": str(wav_path),
+                "candidate_count": len(detections),
+                "reason": "no_valid_bat_calls_after_filtering",
                 "detection_threshold": threshold,
+                "publish_confidence": PUBLISH_CONFIDENCE,
+                "weak_confidence": WEAK_CONFIDENCE,
+                "min_high_freq": MIN_HIGH_FREQ,
                 "output_dir": str(output_dir),
             },
         )
+
+        print("NO VALID BAT CALL. No detection published.", flush=True)
         return None
 
-    best = choose_best_detection(strong)
+    best = choose_best_detection(possible_calls)
+    best_conf = safe_float(best.get("confidence", 0.0), 0.0)
 
-    if best is None:
-        publish_status(
-            "no_bats_detected",
-            {
-                "audio_file": str(wav_path),
-                "detection_threshold": threshold,
-                "output_dir": str(output_dir),
-            },
-        )
-        return None
-
-    best["call_count"] = len(strong)
+    best["call_count"] = len(possible_calls)
     best["output_dir"] = str(output_dir)
     best["detection_threshold"] = threshold
+
+    if best_conf < PUBLISH_CONFIDENCE or len(possible_calls) < MIN_CALL_COUNT:
+        publish_status(
+            "weak_signal",
+            {
+                "audio_file": str(wav_path),
+                "candidate_count": len(detections),
+                "valid_call_count": len(possible_calls),
+                "best_common_name": best.get("common_name", "Bat"),
+                "best_scientific_name": best.get("scientific_name", "Bat"),
+                "best_confidence": best_conf,
+                "reason": "bat_like_signal_but_not_reliable_enough",
+                "detection_threshold": threshold,
+                "publish_confidence": PUBLISH_CONFIDENCE,
+                "min_call_count": MIN_CALL_COUNT,
+                "output_dir": str(output_dir),
+            },
+        )
+
+        print("WEAK BAT-LIKE SIGNAL. Status only, no detection published.", flush=True)
+        return None
 
     if publish:
         publish_detection(best)
@@ -584,26 +522,25 @@ def process_wav(wav_path, threshold=DETECTION_THRESHOLD, publish=True):
             "bat_detected",
             {
                 "audio_file": str(wav_path),
-                "count": len(strong),
+                "count": len(possible_calls),
                 "best_common_name": best.get("common_name", "Bat"),
                 "best_scientific_name": best.get("scientific_name", "Bat"),
-                "best_confidence": best.get("confidence", 0.0),
+                "best_confidence": best_conf,
                 "best_class_probability": best.get("class_probability", 0.0),
                 "low_freq": best.get("low_freq", 0),
                 "high_freq": best.get("high_freq", 0),
                 "detection_threshold": threshold,
+                "publish_confidence": PUBLISH_CONFIDENCE,
             },
         )
 
     return best
 
 
-# =========================
-# Main modes
-# =========================
-
 def run_live_mode(record_seconds=RECORD_SECONDS, threshold=DETECTION_THRESHOLD):
-    print("Starting live bat detection with UltraMic + BatDetect2...", flush=True)
+    print("Starting live bat detection...", flush=True)
+    print("Pipeline: RECORD -> STOP -> ANALYSE -> PUBLISH -> NEXT", flush=True)
+    print(f"record_seconds={record_seconds}, threshold={threshold}", flush=True)
 
     publish_status(
         "started",
@@ -612,7 +549,7 @@ def run_live_mode(record_seconds=RECORD_SECONDS, threshold=DETECTION_THRESHOLD):
             "record_seconds": record_seconds,
             "alsa_device": ALSA_DEVICE,
             "detection_threshold": threshold,
-            "batdetect2_mode": "safe_single_wav",
+            "pipeline": "record_stop_analyse_publish",
         },
     )
 
@@ -621,7 +558,8 @@ def run_live_mode(record_seconds=RECORD_SECONDS, threshold=DETECTION_THRESHOLD):
             wav_path = record_ultrasonic_audio(record_seconds=record_seconds)
             process_wav(wav_path, threshold=threshold, publish=True)
 
-            time.sleep(LOOP_SLEEP_SECONDS)
+            if LOOP_SLEEP_SECONDS > 0:
+                time.sleep(LOOP_SLEEP_SECONDS)
 
         except KeyboardInterrupt:
             print("Stopping live bat detection...", flush=True)
@@ -630,13 +568,8 @@ def run_live_mode(record_seconds=RECORD_SECONDS, threshold=DETECTION_THRESHOLD):
 
         except Exception as e:
             print("ERROR:", e, flush=True)
-            publish_status(
-                "error",
-                {
-                    "message": str(e),
-                },
-            )
-            time.sleep(LOOP_SLEEP_SECONDS)
+            publish_status("error", {"message": str(e)})
+            time.sleep(1)
 
 
 def run_test_wav_mode(test_wav, threshold=DETECTION_THRESHOLD):
@@ -653,32 +586,14 @@ def run_test_wav_mode(test_wav, threshold=DETECTION_THRESHOLD):
     if best:
         print("BEST DETECTION:", best, flush=True)
     else:
-        print("No bat detection published.", flush=True)
+        print("No reliable bat detection published.", flush=True)
 
 
 def main():
     parser = argparse.ArgumentParser(description="Park Life Monitor bat detection script")
-
-    parser.add_argument(
-        "--test-wav",
-        type=str,
-        default=None,
-        help="Analyse one existing wav file and publish the result to MQTT.",
-    )
-
-    parser.add_argument(
-        "--record-seconds",
-        type=int,
-        default=RECORD_SECONDS,
-        help="Recording duration for live mode.",
-    )
-
-    parser.add_argument(
-        "--threshold",
-        type=float,
-        default=DETECTION_THRESHOLD,
-        help="BatDetect2 detection threshold.",
-    )
+    parser.add_argument("--test-wav", type=str, default=None)
+    parser.add_argument("--record-seconds", type=int, default=RECORD_SECONDS)
+    parser.add_argument("--threshold", type=float, default=DETECTION_THRESHOLD)
 
     args = parser.parse_args()
 
