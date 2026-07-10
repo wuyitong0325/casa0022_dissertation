@@ -32,14 +32,14 @@ BATDETECT2_BIN = "/home/wuyitong0325/batdetect-env/bin/batdetect2"
 
 SAMPLE_RATE = 192000
 CHANNELS = 1
-RECORD_SECONDS = 10
+RECORD_SECONDS = 4
 ALSA_DEVICE = "hw:2,0"
 
 # Low threshold for BatDetect2 candidate generation.
 DETECTION_THRESHOLD = 0.20
 
 # Higher threshold for publishing a detection to the app.
-PUBLISH_CONFIDENCE = 0.50
+PUBLISH_CONFIDENCE = 0.40
 WEAK_CONFIDENCE = 0.20
 
 # Extra filters to reduce false positives from laptop noise, speech, and electrical noise.
@@ -422,6 +422,7 @@ def process_wav(wav_path, threshold=DETECTION_THRESHOLD, publish=True):
 
     print("=" * 80, flush=True)
     print(f"PROCESSING: {wav_path}", flush=True)
+    process_start = time.time()
 
     output_dir, stdout, stderr, return_code = run_batdetect2(wav_path, threshold)
 
@@ -442,6 +443,8 @@ def process_wav(wav_path, threshold=DETECTION_THRESHOLD, publish=True):
 
     detections = parse_batdetect2_outputs(output_dir, wav_path)
 
+    process_seconds = time.time() - process_start
+    print(f"PROCESSING TIME: {process_seconds:.2f}s", flush=True)
     print(f"Parsed detection count: {len(detections)}", flush=True)
 
     possible_calls = []
@@ -555,8 +558,11 @@ def run_live_mode(record_seconds=RECORD_SECONDS, threshold=DETECTION_THRESHOLD):
 
     while True:
         try:
+            loop_start = time.time()
             wav_path = record_ultrasonic_audio(record_seconds=record_seconds)
             process_wav(wav_path, threshold=threshold, publish=True)
+            loop_seconds = time.time() - loop_start
+            print(f"FULL LOOP TIME: {loop_seconds:.2f}s", flush=True)
 
             if LOOP_SLEEP_SECONDS > 0:
                 time.sleep(LOOP_SLEEP_SECONDS)
